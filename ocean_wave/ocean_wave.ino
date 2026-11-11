@@ -236,7 +236,7 @@ void diagnosticsFrame(const Motion &m, bool motionOk, uint32_t t0) {
 
 const int16_t LABEL_W = 230, LABEL_H = 26;  // fits inside the circle at this height
 const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - 70;
-bool showFpsLabel = true;
+bool showFpsLabel = false;  // FPS/render overlay on the wave screen (the diagnostics screen always shows timing)
 
 void renderWaveStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *) {
   uint32_t start = micros();

@@ -80,6 +80,29 @@ class Button {
   uint32_t holdHandledCount_ = UINT32_MAX;
 };
 
+// ---- Fast frame output ----
+// Frames are rendered in horizontal strips of STRIP_ROWS rows, into buffers in
+// fast internal RAM. Each strip is sent to the panel by DMA while the CPU
+// renders the next one, so rendering and sending overlap.
+//
+// Note: after using these, don't draw on the panel through the Arduino_GFX
+// object returned by begin(); its cached address window would be stale.
+constexpr int16_t STRIP_ROWS = 20;  // 360 x 20 x 2 bytes = 14,400 bytes per strip
+
+// Fills `pixels` (rows x WIDTH, row-major) for screen rows y0 .. y0 + rows - 1.
+// Pixels are RGB565 in the panel's byte order: convert with panelColor().
+using StripRenderer = void (*)(uint16_t *pixels, int16_t y0, int16_t rows, void *ctx);
+
+// Renders and sends screen rows y0 .. y1 - 1 (full width).
+void drawRows(int16_t y0, int16_t y1, StripRenderer render, void *ctx = nullptr);
+inline void drawFrame(StripRenderer render, void *ctx = nullptr) { drawRows(0, HEIGHT, render, ctx); }
+
+// Fills the whole screen with one colour (normal RGB565).
+void clearScreen(uint16_t rgb565 = 0);
+
+// Normal RGB565 -> the panel's byte order (big-endian).
+constexpr uint16_t panelColor(uint16_t rgb565) { return (uint16_t)((rgb565 >> 8) | (rgb565 << 8)); }
+
 // ---- Motion (QMI8658 6-axis IMU) ----
 // Raw sensor axes, as the chip reports them. How they map onto the screen
 // is decided by the sketch.

@@ -2,6 +2,8 @@
 #include <Wire.h>
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
+#include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "st77916_waveshare_init.h"
 
 namespace NecklaceBoard {
@@ -33,6 +35,14 @@ static constexpr uint8_t QMI_GYR_512DPS = 5 << 4;
 static constexpr float QMI_ACC_SCALE = 8.0f / 32768.0f;
 static constexpr float QMI_GYR_SCALE = 512.0f / 32768.0f;
 static bool imuOk = false;
+
+// ---- Fast frame output ----
+// A second SPI device on the bus Arduino_GFX already set up, with its own
+// DMA transaction queue. CS is driven by hand, as Arduino_ESP32QSPI does.
+static constexpr size_t STRIP_PIXELS = (size_t)WIDTH * STRIP_ROWS;
+static spi_device_handle_t fastDev = nullptr;
+static uint16_t *strips[2] = {nullptr, nullptr};
+static spi_transaction_ext_t fastTrans[2];
 
 static Arduino_DataBus *bus = nullptr;
 static Arduino_GFX *gfx = nullptr;
@@ -133,6 +143,107 @@ static void imuInit() {
   Serial.println("NecklaceBoard: QMI8658 ready");
 }
 
+static bool fastInit() {
+  spi_device_interface_config_t dev = {};
+  dev.command_bits = 8;
+  dev.address_bits = 24;
+  dev.mode = 0;
+  dev.clock_source = SPI_CLK_SRC_DEFAULT;
+  dev.clock_speed_hz = DISPLAY_SPI_HZ;
+  dev.spics_io_num = -1;  // CS by hand: it must stay low across a whole frame
+  dev.flags = SPI_DEVICE_HALFDUPLEX;
+  dev.queue_size = 2;
+  if (spi_bus_add_device(SPI2_HOST, &dev, &fastDev) != ESP_OK) {
+    Serial.println("NecklaceBoard: fast path: spi_bus_add_device failed");
+    fastDev = nullptr;
+    return false;
+  }
+  for (auto &strip : strips) {
+    strip = (uint16_t *)heap_caps_malloc(STRIP_PIXELS * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!strip) {
+      Serial.println("NecklaceBoard: fast path: strip allocation failed");
+      return false;
+    }
+  }
+  return true;
+}
+
+static inline void csLow() { gpio_set_level((gpio_num_t)PIN_LCD_CS, 0); }
+static inline void csHigh() { gpio_set_level((gpio_num_t)PIN_LCD_CS, 1); }
+
+// One command frame, framed exactly like Arduino_ESP32QSPI (opcode 0x02).
+static void fastCommand(uint8_t reg, const uint8_t *data = nullptr, size_t len = 0) {
+  spi_transaction_t t = {};
+  t.flags = SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR;
+  if (len) {
+    t.flags |= SPI_TRANS_USE_TXDATA;
+    memcpy(t.tx_data, data, len);  // len <= 4
+  }
+  t.cmd = 0x02;
+  t.addr = (uint32_t)reg << 8;
+  t.length = len * 8;
+  csLow();
+  spi_device_polling_transmit(fastDev, &t);
+  csHigh();
+}
+
+void drawRows(int16_t y0, int16_t y1, StripRenderer render, void *ctx) {
+  if (!fastDev || !strips[1] || y0 >= y1) return;
+
+  const uint8_t caset[4] = {0, 0, (uint8_t)((WIDTH - 1) >> 8), (uint8_t)((WIDTH - 1) & 0xFF)};
+  const uint8_t raset[4] = {(uint8_t)(y0 >> 8), (uint8_t)y0, (uint8_t)((y1 - 1) >> 8), (uint8_t)(y1 - 1)};
+  fastCommand(0x2A, caset, 4);  // CASET: full width
+  fastCommand(0x2B, raset, 4);  // RASET: rows y0 .. y1 - 1
+  fastCommand(0x2C);            // RAMWR
+
+  // One pixel frame: CS stays low; the first transaction carries the
+  // "memory write continue" header, the rest are raw pixels.
+  csLow();
+  int inFlight = 0;
+  int k = 0;
+  for (int16_t y = y0; y < y1; y += STRIP_ROWS, k++) {
+    int16_t rows = (y1 - y < STRIP_ROWS) ? (y1 - y) : STRIP_ROWS;
+    uint16_t *buf = strips[k & 1];
+    if (inFlight == 2) {  // this buffer's previous strip must be on the wire already
+      spi_transaction_t *done;
+      spi_device_get_trans_result(fastDev, &done, portMAX_DELAY);
+      inFlight--;
+    }
+    render(buf, y, rows, ctx);
+
+    spi_transaction_ext_t &t = fastTrans[k & 1];
+    memset(&t, 0, sizeof(t));
+    if (k == 0) {
+      t.base.flags = SPI_TRANS_MODE_QIO;
+      t.base.cmd = 0x32;
+      t.base.addr = 0x003C00;
+    } else {
+      t.base.flags = SPI_TRANS_MODE_QIO | SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR |
+                     SPI_TRANS_VARIABLE_DUMMY;
+    }
+    t.base.tx_buffer = buf;
+    t.base.length = (size_t)rows * WIDTH * 16;
+    spi_device_queue_trans(fastDev, &t.base, portMAX_DELAY);
+    inFlight++;
+  }
+  while (inFlight > 0) {
+    spi_transaction_t *done;
+    spi_device_get_trans_result(fastDev, &done, portMAX_DELAY);
+    inFlight--;
+  }
+  csHigh();
+}
+
+static void fillStrip(uint16_t *pixels, int16_t, int16_t rows, void *ctx) {
+  uint16_t c = *(uint16_t *)ctx;
+  for (size_t i = 0, n = (size_t)rows * WIDTH; i < n; i++) pixels[i] = c;
+}
+
+void clearScreen(uint16_t rgb565) {
+  uint16_t c = panelColor(rgb565);
+  drawFrame(fillStrip, &c);
+}
+
 static void touchInit() {
   Wire1.begin(PIN_TP_SDA, PIN_TP_SCL, 400000);
   Wire1.beginTransmission(CST816_ADDR);
@@ -162,7 +273,10 @@ Arduino_GFX *begin() {
   rev = detectPanelRevision();
   Serial.printf("NecklaceBoard: panel revision %d\n", rev);
 
-  bus = new Arduino_ESP32QSPI(PIN_LCD_CS, PIN_LCD_SCK, PIN_LCD_D0, PIN_LCD_D1, PIN_LCD_D2, PIN_LCD_D3);
+  // Shared: Arduino_GFX only holds the SPI bus while it draws, so our fast
+  // DMA device (fastInit) can use the same bus.
+  bus = new Arduino_ESP32QSPI(PIN_LCD_CS, PIN_LCD_SCK, PIN_LCD_D0, PIN_LCD_D1, PIN_LCD_D2, PIN_LCD_D3,
+                              true /* is_shared_interface */);
   gfx = new Arduino_ST77916(bus, GFX_NOT_DEFINED /* RST via expander */, 0 /* rotation */,
                             true /* IPS */, WIDTH, HEIGHT, 0, 0, 0, 0,
                             rev == 2 ? waveshare_185_init_rev2 : waveshare_185_init_rev1,
@@ -178,6 +292,7 @@ Arduino_GFX *begin() {
 
   touchInit();
   imuInit();
+  fastInit();
   return gfx;
 }
 

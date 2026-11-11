@@ -115,6 +115,17 @@ struct Motion {
 bool imuReady();
 
 // Reads the latest accelerometer and gyro sample (250 Hz). Returns false on an I2C error.
+// Don't call this once the motion task is running (it owns the I2C reads).
 bool readMotion(Motion &m);
+
+// Starts a background task on core 0 that reads the IMU at its full 250 Hz,
+// so short shocks between frames aren't missed. Returns false if the IMU
+// isn't available.
+bool startMotionTask();
+
+// Latest sample from the motion task, plus the biggest jolt since the
+// previous call: how far the acceleration jumped away from its recent
+// average, in g, over all three axes. Returns false if no sample yet.
+bool latestMotion(Motion &m, float &peakJolt);
 
 }  // namespace NecklaceBoard

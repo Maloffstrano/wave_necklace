@@ -3,15 +3,15 @@
 // Board: Waveshare ESP32-S3-Touch-LCD-1.85 (via the NecklaceBoard library).
 //
 // Screens (BOOT button toggles):
-// - Wave: the necklace itself. For now a test pattern: an animated water
-//   surface rendered straight into DMA strips, to measure the fast pipeline.
+// - Wave: the necklace itself: water sloshing in the bowl (SideView.cpp).
 // - Diagnostics: raw accel/gyro, gravity direction and frame timing.
 //   A blue dot on the rim marks "down" (where the water will pool),
 //   a white dot marks "up" (where the sky will be).
-// Hold PWR for 2 s to power off (when running on battery).
+// Short PWR press: calm the water. Hold PWR for 2 s to power off (on battery).
 
 #include <NecklaceBoard.h>
 #include "FreeSans12pt7b.h"
+#include "SideView.h"
 
 using namespace NecklaceBoard;
 
@@ -29,9 +29,19 @@ const int16_t RIM = 168;  // radius of the direction markers
 float screenGravityX(const Motion &m) { return -m.ay; }
 float screenGravityY(const Motion &m) { return m.ax; }
 
+// Tilt of the screen away from vertical, in degrees:
+// 0 = hanging upright, +90 = flat face up, -90 = flat face down.
+// Measured: face down reads az = +1 g, so face up is az = -1 g.
+float screenLeanDeg(const Motion &m) {
+  float len = sqrtf(m.ax * m.ax + m.ay * m.ay + m.az * m.az);
+  if (len < 0.2f) return 0;  // free fall or a bad reading: no meaningful answer
+  float s = fminf(fmaxf(-m.az / len, -1.0f), 1.0f);
+  return asinf(s) * 180.0f / PI;
+}
+
 // ---- Screens and buttons ----
 enum class Screen { Wave, Diagnostics };
-Screen screen = Screen::Diagnostics;  // start on diagnostics while developing
+Screen screen = Screen::Wave;
 Button bootButton(PIN_BTN_BOOT);
 Button pwrButton(PIN_BTN_PWR);
 const uint32_t POWER_OFF_HOLD_MS = 2000;
@@ -40,6 +50,7 @@ const uint32_t POWER_OFF_HOLD_MS = 2000;
 uint32_t drawUs = 0, flushUs = 0, frameUs = 0;
 uint32_t renderCpuUs = 0;  // wave screen: CPU time spent inside the strip renderer
 float fpsSmoothed = 0;
+float peakJoltShown = 0;  // diagnostics: biggest jolt recently (decays)
 
 // ============================================================================
 // Diagnostics screen: text drawn with Arduino_GFX into a PSRAM canvas, then
@@ -68,9 +79,11 @@ void drawHud(const Motion &m, bool motionOk) {
     hud->setCursor(left, y); hud->print(buf); y += line;
 
     float gx = screenGravityX(m), gy = screenGravityY(m);
-    float tiltDeg = atan2f(gx, gy) * 180.0f / PI;  // 0 = straight down the screen
-    float inPlane = sqrtf(gx * gx + gy * gy);       // ~1 g when the screen is vertical
-    snprintf(buf, sizeof(buf), "tilt %+4.0f   |g| %.2f", tiltDeg, inPlane);
+    float rollDeg = atan2f(gx, gy) * 180.0f / PI;  // rotation in the screen plane, 0 = USB down
+    float leanDeg = screenLeanDeg(m);
+    snprintf(buf, sizeof(buf), "roll %+4.0f   lean %+3.0f", rollDeg, leanDeg);
+    hud->setCursor(left, y); hud->print(buf); y += line;
+    snprintf(buf, sizeof(buf), "jolt %.2f g", peakJoltShown);
     hud->setCursor(left, y); hud->print(buf); y += line;
   }
 
@@ -110,64 +123,37 @@ void diagnosticsFrame(const Motion &m, bool motionOk, uint32_t t0) {
 }
 
 // ============================================================================
-// Wave screen (test pattern): rendered straight into the DMA strips.
+// Wave screen: the sloshing side view (SideView.cpp), rendered straight into
+// the DMA strips, with a small FPS label laid over it.
 // ============================================================================
 
+SideView water;
 const int16_t LABEL_W = 170, LABEL_H = 26;
 const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - 70;
-const int MAX_DEPTH = HEIGHT;
-uint16_t depthColor[MAX_DEPTH];  // water colour by depth below the surface, panel byte order
-int16_t surfaceY[WIDTH];         // water surface height per column, this frame
-
-void buildDepthColors() {
-  for (int d = 0; d < MAX_DEPTH; d++) {
-    if (d < 3) {  // a thin line of froth on the surface
-      depthColor[d] = panelColor(RGB565(235, 245, 255));
-      continue;
-    }
-    float t = fminf(d / 170.0f, 1.0f);  // 0 at the surface, 1 deep down
-    uint8_t r = 30 * (1 - t) + 0 * t;
-    uint8_t g = 150 * (1 - t) + 25 * t;
-    uint8_t b = 230 * (1 - t) + 80 * t;
-    depthColor[d] = panelColor(RGB565(r, g, b));
-  }
-}
-
-void computeSurface(float t) {
-  // Wrap the time-based phases into 0..2pi. sinf() gets much slower for large
-  // arguments (expensive range reduction), and t grows for as long as the
-  // board runs.
-  const float TWO_PI_F = 2.0f * PI;
-  float p1 = fmodf(1.7f * t, TWO_PI_F);
-  float p2 = fmodf(2.3f * t, TWO_PI_F);
-  for (int16_t x = 0; x < WIDTH; x++) {
-    surfaceY[x] = CY + 20 + (int16_t)(22 * sinf(0.030f * x + p1) + 9 * sinf(0.071f * x - p2));
-  }
-}
+bool showFpsLabel = true;
 
 void renderWaveStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *) {
   uint32_t start = micros();
-  const uint16_t black = 0;
-  const uint16_t *labelPx = label->getFramebuffer();
-  for (int16_t r = 0; r < rows; r++) {
-    int16_t y = y0 + r;
-    uint16_t *row = pixels + (size_t)r * WIDTH;
-    for (int16_t x = 0; x < WIDTH; x++) {
-      int d = y - surfaceY[x];
-      row[x] = d < 0 ? black : depthColor[d < MAX_DEPTH ? d : MAX_DEPTH - 1];
-    }
-    // FPS label overlay: copy its non-black pixels on top
-    if (y >= LABEL_Y && y < LABEL_Y + LABEL_H) {
+  SideView::renderStrip(pixels, y0, rows, &water);
+  if (showFpsLabel && y0 < LABEL_Y + LABEL_H && y0 + rows > LABEL_Y) {
+    const uint16_t *labelPx = label->getFramebuffer();
+    for (int16_t r = 0; r < rows; r++) {
+      int16_t y = y0 + r;
+      if (y < LABEL_Y || y >= LABEL_Y + LABEL_H) continue;
       const uint16_t *src = labelPx + (size_t)(y - LABEL_Y) * LABEL_W;
+      uint16_t *row = pixels + (size_t)r * WIDTH + LABEL_X;
       for (int16_t i = 0; i < LABEL_W; i++) {
-        if (src[i]) row[LABEL_X + i] = panelColor(src[i]);
+        if (src[i]) row[i] = panelColor(src[i]);
       }
     }
   }
   renderCpuUs += micros() - start;
 }
 
-void waveFrame(uint32_t t0) {
+void updateFpsLabel() {
+  static uint32_t lastLabel = 0;
+  if (millis() - lastLabel < 250) return;  // 4 updates a second is plenty
+  lastLabel = millis();
   char buf[32];
   label->fillScreen(RGB565_BLACK);
   label->setFont(&FreeSans12pt7b);
@@ -175,8 +161,15 @@ void waveFrame(uint32_t t0) {
   snprintf(buf, sizeof(buf), "%.1f fps  cpu %.1f", fpsSmoothed, renderCpuUs / 1000.0f);
   label->setCursor(4, LABEL_H - 7);
   label->print(buf);
+}
 
-  computeSurface(t0 / 1e6f);
+void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
+  static uint32_t lastUpdate = 0;
+  float dt = lastUpdate ? (t0 - lastUpdate) / 1e6f : 0.0f;
+  lastUpdate = t0;
+  if (motionOk) water.update(screenGravityX(m), screenGravityY(m), dt, jolt);
+  if (showFpsLabel) updateFpsLabel();
+
   uint32_t t1 = micros();
   renderCpuUs = 0;
   drawFrame(renderWaveStrip);
@@ -191,7 +184,7 @@ void handleButtons() {
   if (bootButton.pressed()) {
     screen = (screen == Screen::Wave) ? Screen::Diagnostics : Screen::Wave;
   }
-  pwrButton.pressed();  // short PWR press: not used yet, just discard it
+  if (pwrButton.pressed()) water.reset();  // short PWR press: calm the water
   if (pwrButton.heldFor(POWER_OFF_HOLD_MS)) {
     clearScreen(RGB565_BLACK);
     powerOff();  // on USB power the board keeps running; the screen just goes dark
@@ -213,11 +206,12 @@ void setup() {
     Serial.println("Canvas allocation failed");
     while (true) delay(1000);
   }
-  buildDepthColors();
+  water.begin();
 
   NecklaceBoard::setBacklight(BACKLIGHT_MAX);  // full brightness while developing
   bootButton.begin();
   pwrButton.begin();
+  startMotionTask();  // reads the IMU at 250 Hz on core 0
 }
 
 void loop() {
@@ -228,13 +222,17 @@ void loop() {
   handleButtons();
 
   Motion m = {};
-  bool motionOk = readMotion(m);
+  float jolt = 0;
+  bool motionOk = latestMotion(m, jolt);
+  if (jolt > peakJoltShown) peakJoltShown = jolt;
 
   if (screen == Screen::Diagnostics) {
     diagnosticsFrame(m, motionOk, t0);
   } else {
-    waveFrame(t0);
+    waveFrame(m, motionOk, jolt, t0);
   }
+
+  peakJoltShown *= 0.97f;  // let the diagnostics readout fade over about a second
 
   if (lastFrameStart != 0) {  // the first frame has no interval to measure
     frameUs = t0 - lastFrameStart;

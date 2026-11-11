@@ -136,7 +136,11 @@ static void imuInit() {
   qmiWrite(QMI_CTRL1, 0x40);                            // auto-increment for block reads
   qmiWrite(QMI_CTRL2, QMI_ACC_8G | QMI_ODR_250HZ);      // +-8 g: room for jolts and splashes
   qmiWrite(QMI_CTRL3, QMI_GYR_512DPS | QMI_ODR_250HZ);  // +-512 dps: a swinging pendant turns fast
-  qmiWrite(QMI_CTRL5, 0x11);                            // accel and gyro low-pass filters on
+  // Gyro low-pass filter on; accelerometer filter OFF. Its narrowest mode cuts
+  // off at about 2.7% of the data rate (~7 Hz at 250 Hz), which flattens
+  // shocks like a bang on the table to almost nothing. Smoothing for tilt is
+  // done in software instead.
+  qmiWrite(QMI_CTRL5, 0x10);
   qmiWrite(QMI_CTRL7, 0x03);                            // enable accel + gyro
   delay(30);                                            // gyro needs a moment to start
   imuOk = true;
@@ -310,6 +314,56 @@ bool readMotion(Motion &m) {
   m.gy = s16(8) * QMI_GYR_SCALE;
   m.gz = s16(10) * QMI_GYR_SCALE;
   return true;
+}
+
+// ---- Motion task ----
+static portMUX_TYPE motionLock = portMUX_INITIALIZER_UNLOCKED;
+static Motion motionLatest = {};
+static float motionPeakJolt = 0;
+static bool motionHave = false;
+
+static void motionTask(void *) {
+  const TickType_t period = pdMS_TO_TICKS(4);  // 250 Hz, the sensor's data rate
+  TickType_t wake = xTaskGetTickCount();
+  float avgX = 0, avgY = 0, avgZ = 0;
+  bool first = true;
+  for (;;) {
+    Motion m;
+    if (readMotion(m)) {
+      if (first) {
+        avgX = m.ax; avgY = m.ay; avgZ = m.az;
+        first = false;
+      }
+      // Jolt: distance from a short running average (about 0.1 s).
+      float dx = m.ax - avgX, dy = m.ay - avgY, dz = m.az - avgZ;
+      float jolt = sqrtf(dx * dx + dy * dy + dz * dz);
+      const float k = 0.04f;  // 4 ms / 100 ms
+      avgX += dx * k; avgY += dy * k; avgZ += dz * k;
+
+      portENTER_CRITICAL(&motionLock);
+      motionLatest = m;
+      if (jolt > motionPeakJolt) motionPeakJolt = jolt;
+      motionHave = true;
+      portEXIT_CRITICAL(&motionLock);
+    }
+    vTaskDelayUntil(&wake, period);
+  }
+}
+
+bool startMotionTask() {
+  if (!imuOk) return false;
+  // Core 0: the Arduino loop runs on core 1, so this never steals render time.
+  return xTaskCreatePinnedToCore(motionTask, "motion", 4096, nullptr, 2, nullptr, 0) == pdPASS;
+}
+
+bool latestMotion(Motion &m, float &peakJolt) {
+  portENTER_CRITICAL(&motionLock);
+  bool have = motionHave;
+  m = motionLatest;
+  peakJolt = motionPeakJolt;
+  motionPeakJolt = 0;
+  portEXIT_CRITICAL(&motionLock);
+  return have;
 }
 
 int panelRevision() { return rev; }

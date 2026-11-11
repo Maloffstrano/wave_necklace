@@ -9,6 +9,8 @@
 //   a white dot marks "up" (where the sky will be).
 // Short PWR press: calm the water. Hold PWR for 2 s to power off (on battery).
 // Face down: the screen goes dark until the necklace is picked up again.
+// Flat and left alone for 30 s: rest (backlight fades out, drawing stops);
+// a touch, a bump or picking it up wakes it.
 // Flat face up: the top-down pool (PoolView.cpp); touch it to make ripples.
 // Touch and hold (anywhere): the backlight drops to dimmest and ramps up
 // toward full; release to keep that brightness. A quick tap is left free
@@ -45,6 +47,10 @@ float screenLeanDeg(const Motion &m) {
   return asinf(s) * 180.0f / PI;
 }
 
+// ---- Screens ----
+enum class Screen { Wave, Diagnostics };
+Screen screen = Screen::Wave;
+
 // The two views of the water (see SideView.cpp and PoolView.cpp).
 SideView water;
 PoolView pool;
@@ -69,18 +75,67 @@ const uint32_t DIM_HOLD_MS = 600;     // hold this long to start adjusting (drop
 const uint32_t DIM_PAUSE_MS = 800;    // then stay at dimmest this long, so it's easy to pick
 const float DIM_RAMP_S = 2.5f;        // dimmest -> full
 const uint16_t BRIGHTNESS_MIN = 10;
-uint16_t brightness = BACKLIGHT_MAX;
+uint16_t brightness = BACKLIGHT_MAX;  // the chosen brightness
+
+// ---- Rest ----
+// Lying flat with nothing happening: fade the backlight out and stop drawing,
+// which saves most of the power. Only in the pool (flat), never on the
+// diagnostics screen.
+const uint32_t REST_AFTER_MS = 30000; // idle this long...
+const uint32_t REST_FADE_MS = 3000;   // ...then fade out over this
+const uint32_t WAKE_FADE_MS = 300;    // fade back in on waking
+const float REST_JOLT = 0.08f;        // g: a bump bigger than this counts as activity (typing nearby is ~0.07)
+uint32_t lastActivityMs = 0;
+uint32_t wakeMs = 0;
+bool resting = false;
+
+// The one place the backlight is set: the chosen brightness, scaled by the
+// rest and wake fades, off when face down or resting.
+void updateBacklight() {
+  static int32_t current = -1;
+  uint32_t now = millis();
+  float level = brightness;
+  if (faceDown || resting) {
+    level = 0;
+  } else {
+    uint32_t idle = now - lastActivityMs;
+    if (idle > REST_AFTER_MS) level *= 1.0f - fminf((float)(idle - REST_AFTER_MS) / REST_FADE_MS, 1.0f);
+    uint32_t awake = now - wakeMs;
+    if (awake < WAKE_FADE_MS) level *= (float)awake / WAKE_FADE_MS;
+  }
+  int32_t duty = (int32_t)(level + 0.5f);
+  if (duty == 0 && level > 0) duty = 1;  // never "off" by rounding while it's meant to be on
+  if (duty != current) {
+    setBacklight((uint16_t)duty);
+    current = duty;
+  }
+}
+
+// Called every frame: keeps track of activity, and enters or leaves rest.
+void updateRest(float jolt, bool touched) {
+  uint32_t now = millis();
+  bool active = touched || jolt > REST_JOLT || !poolMode || screen == Screen::Diagnostics;
+  if (active) {
+    if (resting) {
+      resting = false;
+      wakeMs = now;  // fade back in
+    }
+    lastActivityMs = now;
+  } else if (!resting && now - lastActivityMs > REST_AFTER_MS + REST_FADE_MS) {
+    resting = true;
+  }
+}
 
 void updateOrientation(const Motion &m, float dt) {
   float a = 1.0f - expf(-dt / LEAN_SMOOTHING);
   leanSmoothed += (screenLeanDeg(m) - leanSmoothed) * a;
   if (!faceDown && leanSmoothed < FACE_DOWN_ENTER) {
     faceDown = true;
-    setBacklight(0);
+    setBacklight(0);  // straight off, before the screen is cleared
     clearScreen(RGB565_BLACK);
   } else if (faceDown && leanSmoothed > FACE_DOWN_EXIT) {
     faceDown = false;
-    setBacklight(brightness);
+    wakeMs = millis();  // fade back in
   }
   if (!poolMode && leanSmoothed > POOL_ENTER) {
     poolMode = true;
@@ -93,9 +148,7 @@ void updateOrientation(const Motion &m, float dt) {
   }
 }
 
-// ---- Screens and buttons ----
-enum class Screen { Wave, Diagnostics };
-Screen screen = Screen::Wave;
+// ---- Buttons ----
 Button bootButton(PIN_BTN_BOOT);
 Button pwrButton(PIN_BTN_PWR);
 const uint32_t POWER_OFF_HOLD_MS = 2000;
@@ -261,7 +314,6 @@ void readFinger() {
   uint32_t ramp = held - DIM_HOLD_MS;
   float t = ramp < DIM_PAUSE_MS ? 0.0f : fminf((ramp - DIM_PAUSE_MS) / 1000.0f / DIM_RAMP_S, 1.0f);
   brightness = (uint16_t)(BRIGHTNESS_MIN * powf((float)BACKLIGHT_MAX / BRIGHTNESS_MIN, t) + 0.5f);
-  setBacklight(brightness);
 }
 
 bool touchDown(int16_t &x, int16_t &y) {
@@ -322,9 +374,12 @@ void loop() {
   if (motionOk) updateOrientation(m, lastOrientation ? (t0 - lastOrientation) / 1e6f : 0.0f);
   lastOrientation = t0;
 
-  if (faceDown) {
-    // Dark and idle: skip drawing, check the sensor ~20 times a second.
-    // The water simply resumes when the necklace is picked up.
+  updateRest(jolt, fingerDown);
+  updateBacklight();
+
+  if (faceDown || resting) {
+    // Dark and idle: skip drawing, check the sensor and touch ~20 times a
+    // second. The water simply resumes when the necklace wakes.
     lastFrameStart = 0;  // don't count the pause in the FPS
     delay(50);
     return;

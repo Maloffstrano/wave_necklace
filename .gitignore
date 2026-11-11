@@ -1,0 +1,9 @@
+# Firmware dumps (large, and Waveshare's firmware)
+backup/*.bin
+
+# Build output
+build/
+*.elf
+*.map
+
+.DS_Store

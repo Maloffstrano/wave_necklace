@@ -193,6 +193,7 @@ void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
   static uint32_t lastUpdate = 0;
   float dt = lastUpdate ? (t0 - lastUpdate) / 1e6f : 0.0f;
   lastUpdate = t0;
+  water.setLean(leanSmoothed);
   if (motionOk) water.update(screenGravityX(m), screenGravityY(m), dt, jolt);
   if (showFpsLabel) updateFpsLabel();
 

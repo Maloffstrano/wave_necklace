@@ -42,7 +42,13 @@ namespace {
 
 // ---- Tuning ----
 const float REST_LEVEL = -14.0f;      // rest surface height (px above the bowl centre): about 45% full
-const float WAVE_SPEED = 330.0f;      // px/s: a wave crosses the bowl in about 1.1 s
+// Leaning back shows more of the water (like looking into a glass from above):
+// the level rises from REST_LEVEL at LEAN_RISE_START to FULL_LEVEL at
+// LEAN_RISE_END, leaving a sliver of sky, and the top-down pool takes over.
+const float LEAN_RISE_START = 40.0f;  // degrees: normal wear (+26..+34) stays unchanged
+const float LEAN_RISE_END = 80.0f;    // degrees
+const float FULL_LEVEL = 150.0f;      // px: 30 px of sky left at the top
+const float WAVE_SPEED = 165.0f;      // px/s: a wave crosses the bowl in about 2.2 s ("slow and stately")
 const float DEPTH = 100.0f;           // effective water depth for the wave equation, px
 const float G = WAVE_SPEED * WAVE_SPEED / DEPTH;  // so that c = sqrt(G * DEPTH)
 const float DAMPING = 0.9f;           // 1/s: how quickly sloshing dies down
@@ -67,7 +73,7 @@ const float MAX_BOOST = 0.25f;        // g
 const float SWELL_AMPLITUDE = 0.012f; // g: a lazy, slowly drifting sideways push
 const float SWELL_PERIOD = 2.5f;      // s: how often the swell picks a new target
 const float DROP_INTERVAL = 1.8f;     // s: average time between small random disturbances
-const float DROP_STRENGTH = 35.0f;    // px/s of flow added at one spot
+const float DROP_STRENGTH = 30.0f;    // px/s of flow added at one spot
 const float QUIET_BEFORE_DROPS = 3.0f;  // s without splashes or real motion before drops start
 const float ACTIVE_BOOST = 0.02f;     // g: a motion boost above this counts as real motion
 const float STILL_FLOW = 6.0f;        // px/s: every cell's flow below this counts as still
@@ -78,8 +84,8 @@ const float STILL_BEFORE_DROPS = 2.0f;  // s the water must stay still before a 
 // Measured on the desk: rest ~0 g, typing nearby 0.07 g, three-finger tap
 // 0.2 g, fist on the table > 2 g. 0.1 ignores typing but splashes on taps.
 const float JOLT_THRESHOLD = 0.1f;    // g
-const float SPLASH_GAIN = 220.0f;     // px/s of flow per sqrt(g) of jolt
-const float MAX_SPLASH = 260.0f;      // px/s
+const float SPLASH_GAIN = 90.0f;      // px/s of flow per sqrt(g) of jolt (lower now that waves are slower)
+const float MAX_SPLASH = 110.0f;      // px/s
 
 // Safety limits for violent shaking. Chosen so that normal tilting, rolling,
 // taps and bangs are unaffected; to be fine-tuned once it's worn on battery.
@@ -103,6 +109,17 @@ const float CURL_SPEED_GAIN = 1.4f;      // launch speed = rise rate * this
 // the bowl ("loop-the-loop") instead of peeling off into a curl.
 const float CURL_MAX_SPEED = 410.0f;     // px/s: just under the loop-the-loop limit
 const float CURL_EMIT_RATE = 0.02f;      // particles per frame per px/s of rise
+// The water running up the wall is a tongue: thick at the base, stretching
+// thin as it climbs. Particles start spread over CURL_THICKNESS px in from the
+// wall; the ones nearest the wall are fastest (they're riding the wall), the
+// inner ones slower, so they fall back first and the tip stretches out. Each
+// starts as a fat blob and shrinks to a thin sheet as it ages.
+const float CURL_THICKNESS = 12.0f;      // px: how far in from the wall the tongue starts
+const float CURL_INNER_SLOWDOWN = 0.35f; // innermost particles launch this much slower
+const float CURL_LIFE = 2.0f;            // s
+const float CURL_BLOB_TIME = 0.45f;      // s: blobs shrink from fat to thin over this
+const int CURL_BLOB_R = 6;               // px: radius at launch
+const int CURL_SHEET_R = 2;              // px: radius once stretched out
 const float SPRAY_MIN_RISE = 220.0f;     // px/s: crests rising faster throw droplets
 const float SPRAY_CHANCE = 0.0003f;      // per frame, per px/s above the minimum
 const int MAX_SPRAY_PER_FRAME = 1;       // across the whole surface
@@ -128,7 +145,7 @@ const int EDGE_LEVELS = 16;
 // white line. FOAM_SHADES steps from 0 (sheet blue, at the wall) to the last
 // (full froth colour).
 const int FOAM_SHADES = 8;
-const float WALL_FADE_PX = 28.0f;  // width of the fade, measured from the wall
+const float WALL_FADE_PX = 50.0f;  // width of the fade, measured from the wall
 uint16_t foamShade[FOAM_SHADES];
 uint16_t edgeColor[FOAM_SHADES][EDGE_LEVELS];  // each shade blended into the black sky, for anti-aliasing
 const uint16_t DROPLET_COLOR = panelColor(RGB565(240, 248, 255));
@@ -190,6 +207,13 @@ void SideView::begin() {
   rngState ^= esp_random();
 }
 
+void SideView::setLean(float leanDeg) {
+  float t = (leanDeg - LEAN_RISE_START) / (LEAN_RISE_END - LEAN_RISE_START);
+  t = fminf(fmaxf(t, 0.0f), 1.0f);
+  t = t * t * (3 - 2 * t);  // smoothstep: eases in and out of the rise
+  restLevel_ = REST_LEVEL + (FULL_LEVEL - REST_LEVEL) * t;
+}
+
 void SideView::reset() {
   for (int i = 0; i < N; i++) h_[i] = foam_[i] = 0;
   for (int j = 0; j <= N; j++) q_[j] = 0;
@@ -231,11 +255,11 @@ void SideView::splash(float jolt) {
 
 float SideView::surfaceAt(float u) const {
   float cell = (u + RADIUS) / DX;
-  if (cell <= 0) return REST_LEVEL + h_[0];
-  if (cell >= N - 1) return REST_LEVEL + h_[N - 1];
+  if (cell <= 0) return restLevel_ + h_[0];
+  if (cell >= N - 1) return restLevel_ + h_[N - 1];
   int i = (int)cell;
   float f = cell - i;
-  return REST_LEVEL + h_[i] + (h_[i + 1] - h_[i]) * f;
+  return restLevel_ + h_[i] + (h_[i + 1] - h_[i]) * f;
 }
 
 void SideView::emit(float u, float v, float vu, float vv, uint8_t kind, float life) {
@@ -279,12 +303,15 @@ void SideView::emitWallCurl(int side, float dt) {
   float speed = fminf(rise * CURL_SPEED_GAIN, CURL_MAX_SPEED);
   float count = rise * CURL_EMIT_RATE * (dt * 60);  // about the same per second at any FPS
   int n = (int)count + (random01() < count - (int)count ? 1 : 0);
+  // Inward normal (towards the bowl centre) at the contact point.
+  float nu = -u / RADIUS, nv = -v / RADIUS;
   for (int k = 0; k < n; k++) {
-    float jitter = 0.9f + 0.2f * random01();
-    // Start just inside the wall, spread a little along it.
-    float along = random01() * 4;
-    emit(u - side * 1.5f + tu * along, v + tv * along,
-         tu * speed * jitter, tv * speed * jitter, 1, 2.0f);
+    float depth = random01();  // 0 = against the wall, 1 = innermost
+    float s = speed * (1 - CURL_INNER_SLOWDOWN * depth) * (0.95f + 0.1f * random01());
+    float in = 1.5f + depth * CURL_THICKNESS;
+    float along = random01() * 4;  // spread a little along the wall
+    emit(u + nu * in + tu * along, v + nv * in + tv * along,
+         tu * s, tv * s, 1, CURL_LIFE);
   }
   foam_[cell] = fmaxf(foam_[cell], fminf(rise / 600, 0.5f));
 }
@@ -357,8 +384,10 @@ void SideView::prepareParticles() {
     d.x = (int16_t)(WIDTH / 2 + p.u * downY_ - p.v * downX_);
     d.y = (int16_t)(HEIGHT / 2 - p.u * downX_ - p.v * downY_);
     if (p.kind == 1) {
-      d.r = 2;
-      d.color = p.life < 1.6f ? SHEET_EDGE_COLOR : SHEET_COLOR;  // whiter as it ages
+      // Fat blob at the base of the tongue, thinning to a sheet as it climbs.
+      float young = 1 - (CURL_LIFE - p.life) / CURL_BLOB_TIME;
+      d.r = (uint8_t)(CURL_SHEET_R + (young > 0 ? (int)(young * (CURL_BLOB_R - CURL_SHEET_R) + 0.5f) : 0));
+      d.color = p.life < CURL_LIFE - 0.4f ? SHEET_EDGE_COLOR : SHEET_COLOR;  // whiter as it ages
     } else {
       d.r = 1 + (k & 1);
       d.color = DROPLET_COLOR;
@@ -538,13 +567,13 @@ void SideView::prepareRender() {
       h = h_[i] + (h_[i + 1] - h_[i]) * f;
       foam = foam_[i] + (foam_[i + 1] - foam_[i]) * f;
     }
-    surfaceQ_[k] = (int32_t)((REST_LEVEL + h) * 65536.0f);
+    surfaceQ_[k] = (int32_t)((restLevel_ + h) * 65536.0f);
     foamPx_[k] = (uint8_t)(1 + foam * FOAM_MAX_PX + 0.5f);  // always at least a thin line
 
     // Distance to the wall at the surface's height (the wall is a circle,
     // so at height v it sits at |u| = sqrt(R^2 - v^2)), for the froth fade.
     float u = (float)(k - TABLE_OFFSET);
-    float v = REST_LEVEL + h;
+    float v = restLevel_ + h;
     float w2 = RADIUS * RADIUS - v * v;
     float wallDist = (w2 > 0 ? sqrtf(w2) : 0) - fabsf(u);
     float t = wallDist / WALL_FADE_PX;

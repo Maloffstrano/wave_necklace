@@ -28,6 +28,10 @@ class SideView {
   // sudden change in acceleration since the last update, in g (any direction).
   void update(float gx, float gy, float dt, float jolt = 0);
 
+  // Lean of the screen away from vertical, in degrees (smoothed): leaning
+  // back raises the water level, as if looking into the bowl from above.
+  void setLean(float leanDeg);
+
   // NecklaceBoard::StripRenderer: pass the SideView as ctx.
   static void renderStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *ctx);
 
@@ -59,6 +63,7 @@ class SideView {
   float h_[N] = {};        // surface height per cell, px above the rest level
   float q_[N + 1] = {};    // flow velocity at faces between cells, px/s
   float foam_[N] = {};     // foam amount per cell, 0..1
+  float restLevel_ = -14.0f;     // current rest surface height, px (follows the lean)
   float downX_ = 0, downY_ = 1;  // smoothed gravity direction on screen
   float lastGx_ = 0, lastGy_ = 1;
   float slowSide_ = 0;          // slowly smoothed sideways push, g (for the sensitivity boost)

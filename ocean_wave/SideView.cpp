@@ -44,10 +44,10 @@ namespace {
 const float REST_LEVEL = -14.0f;      // rest surface height (px above the bowl centre): about 45% full
 // Leaning back shows more of the water (like looking into a glass from above):
 // the level rises from REST_LEVEL at LEAN_RISE_START to FULL_LEVEL at
-// LEAN_RISE_END, leaving a sliver of sky, and the top-down pool takes over.
+// LEAN_RISE_END, filling the bowl completely, and the top-down pool takes over.
 const float LEAN_RISE_START = 40.0f;  // degrees: normal wear (+26..+34) stays unchanged
 const float LEAN_RISE_END = 80.0f;    // degrees
-const float FULL_LEVEL = 150.0f;      // px: 30 px of sky left at the top
+const float FULL_LEVEL = 195.0f;      // px: above the rim (180), so the bowl is full before the pool takes over
 const float WAVE_SPEED = 165.0f;      // px/s: a wave crosses the bowl in about 2.2 s ("slow and stately")
 const float DEPTH = 100.0f;           // effective water depth for the wave equation, px
 const float G = WAVE_SPEED * WAVE_SPEED / DEPTH;  // so that c = sqrt(G * DEPTH)

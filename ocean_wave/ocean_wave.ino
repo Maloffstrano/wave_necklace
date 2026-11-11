@@ -9,10 +9,15 @@
 //   a white dot marks "up" (where the sky will be).
 // Short PWR press: calm the water. Hold PWR for 2 s to power off (on battery).
 // Face down: the screen goes dark until the necklace is picked up again.
+// Flat face up: the top-down pool (PoolView.cpp); touch it to make ripples.
+// Touch and hold (anywhere): the backlight drops to dimmest and ramps up
+// toward full; release to keep that brightness. A quick tap is left free
+// (in the pool it makes a ripple).
 
 #include <NecklaceBoard.h>
 #include "FreeSans12pt7b.h"
 #include "SideView.h"
+#include "PoolView.h"
 
 using namespace NecklaceBoard;
 
@@ -40,6 +45,10 @@ float screenLeanDeg(const Motion &m) {
   return asinf(s) * 180.0f / PI;
 }
 
+// The two views of the water (see SideView.cpp and PoolView.cpp).
+SideView water;
+PoolView pool;
+
 // ---- Orientation ----
 // Lean averaged over about half a second, so a quick swing or a bump doesn't
 // flip the mode. Face down (lean near -90) blanks the screen; it takes a clear
@@ -47,9 +56,20 @@ float screenLeanDeg(const Motion &m) {
 const float LEAN_SMOOTHING = 0.5f;    // s
 const float FACE_DOWN_ENTER = -70.0f; // degrees: blank below this...
 const float FACE_DOWN_EXIT = -50.0f;  // ...and wake above this
+const float POOL_ENTER = 80.0f;       // degrees: flat enough for the top-down pool...
+const float POOL_EXIT = 72.0f;        // ...and back to the side view below this
 float leanSmoothed = 0;
 bool faceDown = false;
-uint16_t brightness = BACKLIGHT_MAX;  // full brightness while developing
+bool poolMode = false;
+
+// Brightness by touch and hold. The ramp is exponential (each step
+// multiplies the brightness), which is how the eye judges it; a linear ramp
+// would look "already bright" after the first moment. The dimmest suits a dark room.
+const uint32_t DIM_HOLD_MS = 600;     // hold this long to start adjusting (drops to dimmest)
+const uint32_t DIM_PAUSE_MS = 800;    // then stay at dimmest this long, so it's easy to pick
+const float DIM_RAMP_S = 2.5f;        // dimmest -> full
+const uint16_t BRIGHTNESS_MIN = 10;
+uint16_t brightness = BACKLIGHT_MAX;
 
 void updateOrientation(const Motion &m, float dt) {
   float a = 1.0f - expf(-dt / LEAN_SMOOTHING);
@@ -62,6 +82,12 @@ void updateOrientation(const Motion &m, float dt) {
     faceDown = false;
     setBacklight(brightness);
   }
+  if (!poolMode && leanSmoothed > POOL_ENTER) {
+    poolMode = true;
+    pool.reset();  // fresh, calm water (the side view's was nearly still at this lean)
+    pool.setDown(water.downX(), water.downY());  // carry on the side view's colours
+  }
+  else if (poolMode && leanSmoothed < POOL_EXIT) poolMode = false;
 }
 
 // ---- Screens and buttons ----
@@ -108,7 +134,7 @@ void drawHud(const Motion &m, bool motionOk) {
     float leanDeg = screenLeanDeg(m);
     snprintf(buf, sizeof(buf), "roll %+4.0f  lean %+3.0f (%+3.0f)", rollDeg, leanDeg, leanSmoothed);
     hud->setCursor(left, y); hud->print(buf); y += line;
-    snprintf(buf, sizeof(buf), "jolt %.2f g", peakJoltShown);
+    snprintf(buf, sizeof(buf), "jolt %.2f g  %s", peakJoltShown, poolMode ? "pool" : "side");
     hud->setCursor(left, y); hud->print(buf); y += line;
   }
 
@@ -152,14 +178,14 @@ void diagnosticsFrame(const Motion &m, bool motionOk, uint32_t t0) {
 // the DMA strips, with a small FPS label laid over it.
 // ============================================================================
 
-SideView water;
 const int16_t LABEL_W = 230, LABEL_H = 26;  // fits inside the circle at this height
 const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - 70;
 bool showFpsLabel = true;
 
 void renderWaveStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *) {
   uint32_t start = micros();
-  SideView::renderStrip(pixels, y0, rows, &water);
+  if (poolMode) PoolView::renderStrip(pixels, y0, rows, &pool);
+  else SideView::renderStrip(pixels, y0, rows, &water);
   if (showFpsLabel && y0 < LABEL_Y + LABEL_H && y0 + rows > LABEL_Y) {
     const uint16_t *labelPx = label->getFramebuffer();
     for (int16_t r = 0; r < rows; r++) {
@@ -194,7 +220,14 @@ void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
   float dt = lastUpdate ? (t0 - lastUpdate) / 1e6f : 0.0f;
   lastUpdate = t0;
   water.setLean(leanSmoothed);
-  if (motionOk) water.update(screenGravityX(m), screenGravityY(m), dt, jolt);
+  if (poolMode) {
+    int16_t tx, ty;
+    if (touchDown(tx, ty)) pool.touch(tx, ty);
+    else pool.release();
+    pool.update(dt, jolt, screenGravityX(m), screenGravityY(m));
+  } else if (motionOk) {
+    water.update(screenGravityX(m), screenGravityY(m), dt, jolt);
+  }
   if (showFpsLabel) updateFpsLabel();
 
   uint32_t t1 = micros();
@@ -206,6 +239,33 @@ void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
 }
 
 // ============================================================================
+// Touch: read once per frame. In the pool a finger makes ripples; elsewhere a
+// tap (finger landing) steps the backlight.
+// ============================================================================
+
+bool fingerDown = false;
+int16_t fingerX = 0, fingerY = 0;
+uint32_t fingerDownMs = 0;
+
+void readFinger() {
+  bool was = fingerDown;
+  fingerDown = readTouch(fingerX, fingerY);
+  if (!fingerDown) return;
+  if (!was) fingerDownMs = millis();
+  uint32_t held = millis() - fingerDownMs;
+  if (held < DIM_HOLD_MS) return;
+  // Adjusting: dimmest for DIM_PAUSE_MS, then ramp to full over DIM_RAMP_S.
+  uint32_t ramp = held - DIM_HOLD_MS;
+  float t = ramp < DIM_PAUSE_MS ? 0.0f : fminf((ramp - DIM_PAUSE_MS) / 1000.0f / DIM_RAMP_S, 1.0f);
+  brightness = (uint16_t)(BRIGHTNESS_MIN * powf((float)BACKLIGHT_MAX / BRIGHTNESS_MIN, t) + 0.5f);
+  setBacklight(brightness);
+}
+
+bool touchDown(int16_t &x, int16_t &y) {
+  x = fingerX;
+  y = fingerY;
+  return fingerDown;
+}
 
 void handleButtons() {
   if (bootButton.pressed()) {
@@ -234,6 +294,7 @@ void setup() {
     while (true) delay(1000);
   }
   water.begin();
+  pool.begin();
 
   NecklaceBoard::setBacklight(brightness);
   bootButton.begin();
@@ -247,6 +308,7 @@ void loop() {
   uint32_t t0 = micros();
 
   handleButtons();
+  readFinger();
 
   Motion m = {};
   float jolt = 0;

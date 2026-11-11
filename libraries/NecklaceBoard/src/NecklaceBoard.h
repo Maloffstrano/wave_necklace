@@ -53,6 +53,10 @@ void setBacklight(uint16_t duty);
 // True while a finger is on the screen.
 bool isTouched();
 
+// Reads the touch controller: true while a finger is down, with its
+// position in screen pixels (0..WIDTH-1, 0..HEIGHT-1).
+bool readTouch(int16_t &x, int16_t &y);
+
 // ---- Buttons and power ----
 // Cuts battery power (releases the power latch). On USB power the board keeps running.
 void powerOff();

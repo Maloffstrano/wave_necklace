@@ -380,6 +380,21 @@ bool isTouched() {
   return Wire1.read() > 0;
 }
 
+bool readTouch(int16_t &x, int16_t &y) {
+  // Registers 0x02..0x06: finger count, then X and Y as 12-bit values
+  // (high 4 bits in the low nibble of the first byte).
+  Wire1.beginTransmission(CST816_ADDR);
+  Wire1.write(CST816_REG_FINGERS);
+  if (Wire1.endTransmission(false) != 0) return false;
+  if (Wire1.requestFrom(CST816_ADDR, (uint8_t)5) != 5) return false;
+  uint8_t b[5];
+  for (auto &v : b) v = Wire1.read();
+  if (b[0] == 0) return false;
+  x = ((b[1] & 0x0F) << 8) | b[2];
+  y = ((b[3] & 0x0F) << 8) | b[4];
+  return true;
+}
+
 void powerOff() {
   setBacklight(0);
   digitalWrite(PIN_PWR_LATCH, LOW);

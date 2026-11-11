@@ -123,8 +123,14 @@ const float LANDING_FOAM = 0.25f;        // foam a landing particle leaves (0..1
 const int MAX_DEPTH = 400;
 uint16_t depthColor[2][MAX_DEPTH];
 const int EDGE_LEVELS = 16;
-uint16_t edgeColor[EDGE_LEVELS];  // foam blended into the black sky, for anti-aliasing
-const uint16_t FOAM_COLOR = panelColor(RGB565(205, 232, 252));  // soft blue-white
+// Near the wall the froth fades from blue-white into the curl sheet's light
+// blue, so the curl visibly grows out of the surface instead of out of a
+// white line. FOAM_SHADES steps from 0 (sheet blue, at the wall) to the last
+// (full froth colour).
+const int FOAM_SHADES = 8;
+const float WALL_FADE_PX = 28.0f;  // width of the fade, measured from the wall
+uint16_t foamShade[FOAM_SHADES];
+uint16_t edgeColor[FOAM_SHADES][EDGE_LEVELS];  // each shade blended into the black sky, for anti-aliasing
 const uint16_t DROPLET_COLOR = panelColor(RGB565(240, 248, 255));
 const uint16_t SHEET_COLOR = panelColor(RGB565(140, 205, 245));  // the curling sheet of water
 const uint16_t SHEET_EDGE_COLOR = panelColor(RGB565(200, 235, 255));
@@ -148,9 +154,15 @@ void buildColors() {
       depthColor[k][d] = panelColor(rgb565(r * 31 / 255 + off, g * 63 / 255 + off, b * 31 / 255 + off));
     }
   }
-  for (int k = 0; k < EDGE_LEVELS; k++) {
-    float a = (k + 0.5f) / EDGE_LEVELS;  // share of the pixel covered by water
-    edgeColor[k] = panelColor(rgb565(205 * a * 31 / 255, 232 * a * 63 / 255, 252 * a * 31 / 255));  // matches FOAM_COLOR
+  // Froth shades: curl-sheet blue (140, 205, 245) at the wall -> froth (205, 232, 252).
+  for (int f = 0; f < FOAM_SHADES; f++) {
+    float t = (float)f / (FOAM_SHADES - 1);
+    float r = 140 + (205 - 140) * t, g = 205 + (232 - 205) * t, b = 245 + (252 - 245) * t;
+    foamShade[f] = panelColor(rgb565(r * 31 / 255, g * 63 / 255, b * 31 / 255));
+    for (int k = 0; k < EDGE_LEVELS; k++) {
+      float a = (k + 0.5f) / EDGE_LEVELS;  // share of the pixel covered by water
+      edgeColor[f][k] = panelColor(rgb565(r * a * 31 / 255, g * a * 63 / 255, b * a * 31 / 255));
+    }
   }
 }
 
@@ -528,6 +540,15 @@ void SideView::prepareRender() {
     }
     surfaceQ_[k] = (int32_t)((REST_LEVEL + h) * 65536.0f);
     foamPx_[k] = (uint8_t)(1 + foam * FOAM_MAX_PX + 0.5f);  // always at least a thin line
+
+    // Distance to the wall at the surface's height (the wall is a circle,
+    // so at height v it sits at |u| = sqrt(R^2 - v^2)), for the froth fade.
+    float u = (float)(k - TABLE_OFFSET);
+    float v = REST_LEVEL + h;
+    float w2 = RADIUS * RADIUS - v * v;
+    float wallDist = (w2 > 0 ? sqrtf(w2) : 0) - fabsf(u);
+    float t = wallDist / WALL_FADE_PX;
+    foamShade_[k] = (uint8_t)(t <= 0 ? 0 : (t >= 1 ? FOAM_SHADES - 1 : t * (FOAM_SHADES - 1) + 0.5f));
   }
   // Water-frame axes: horizontal h = (downY, -downX), down d = (downX, downY).
   hxQ_ = (int32_t)(downY_ * 65536.0f);
@@ -574,12 +595,12 @@ void SideView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
       if (depthQ < 0) {
         // Sky, except for the pixel straddling the surface: anti-alias it by
         // how much of it is water.
-        row[x] = depthQ > -65536 ? edgeColor[(depthQ + 65536) >> 12] : SKY_COLOR;
+        row[x] = depthQ > -65536 ? edgeColor[foamShade_[k]][(depthQ + 65536) >> 12] : SKY_COLOR;
         continue;
       }
       int32_t depth = depthQ >> 16;
       if (depth < foamPx_[k]) {
-        row[x] = FOAM_COLOR;
+        row[x] = foamShade[foamShade_[k]];
       } else {
         row[x] = dither[x & 1][depth < MAX_DEPTH ? depth : MAX_DEPTH - 1];
       }

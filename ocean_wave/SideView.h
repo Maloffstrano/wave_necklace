@@ -91,5 +91,6 @@ class SideView {
   static constexpr int TABLE_SIZE = 2 * TABLE_OFFSET;
   int32_t surfaceQ_[TABLE_SIZE] = {};  // surface height (v), 16.16 fixed point
   uint8_t foamPx_[TABLE_SIZE] = {};    // foam thickness, px
+  uint8_t foamShade_[TABLE_SIZE] = {}; // froth colour: 0 = curl-sheet blue at the wall .. full froth
   int32_t hxQ_ = 0, hyQ_ = 0, dxQ_ = 0, dyQ_ = 0;  // water-frame axes
 };

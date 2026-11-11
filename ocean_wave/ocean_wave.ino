@@ -8,6 +8,7 @@
 //   A blue dot on the rim marks "down" (where the water will pool),
 //   a white dot marks "up" (where the sky will be).
 // Short PWR press: calm the water. Hold PWR for 2 s to power off (on battery).
+// Face down: the screen goes dark until the necklace is picked up again.
 
 #include <NecklaceBoard.h>
 #include "FreeSans12pt7b.h"
@@ -37,6 +38,30 @@ float screenLeanDeg(const Motion &m) {
   if (len < 0.2f) return 0;  // free fall or a bad reading: no meaningful answer
   float s = fminf(fmaxf(-m.az / len, -1.0f), 1.0f);
   return asinf(s) * 180.0f / PI;
+}
+
+// ---- Orientation ----
+// Lean averaged over about half a second, so a quick swing or a bump doesn't
+// flip the mode. Face down (lean near -90) blanks the screen; it takes a clear
+// lift to wake it, so it doesn't flicker on and off at the threshold.
+const float LEAN_SMOOTHING = 0.5f;    // s
+const float FACE_DOWN_ENTER = -70.0f; // degrees: blank below this...
+const float FACE_DOWN_EXIT = -50.0f;  // ...and wake above this
+float leanSmoothed = 0;
+bool faceDown = false;
+uint16_t brightness = BACKLIGHT_MAX;  // full brightness while developing
+
+void updateOrientation(const Motion &m, float dt) {
+  float a = 1.0f - expf(-dt / LEAN_SMOOTHING);
+  leanSmoothed += (screenLeanDeg(m) - leanSmoothed) * a;
+  if (!faceDown && leanSmoothed < FACE_DOWN_ENTER) {
+    faceDown = true;
+    setBacklight(0);
+    clearScreen(RGB565_BLACK);
+  } else if (faceDown && leanSmoothed > FACE_DOWN_EXIT) {
+    faceDown = false;
+    setBacklight(brightness);
+  }
 }
 
 // ---- Screens and buttons ----
@@ -81,7 +106,7 @@ void drawHud(const Motion &m, bool motionOk) {
     float gx = screenGravityX(m), gy = screenGravityY(m);
     float rollDeg = atan2f(gx, gy) * 180.0f / PI;  // rotation in the screen plane, 0 = USB down
     float leanDeg = screenLeanDeg(m);
-    snprintf(buf, sizeof(buf), "roll %+4.0f   lean %+3.0f", rollDeg, leanDeg);
+    snprintf(buf, sizeof(buf), "roll %+4.0f  lean %+3.0f (%+3.0f)", rollDeg, leanDeg, leanSmoothed);
     hud->setCursor(left, y); hud->print(buf); y += line;
     snprintf(buf, sizeof(buf), "jolt %.2f g", peakJoltShown);
     hud->setCursor(left, y); hud->print(buf); y += line;
@@ -209,7 +234,7 @@ void setup() {
   }
   water.begin();
 
-  NecklaceBoard::setBacklight(BACKLIGHT_MAX);  // full brightness while developing
+  NecklaceBoard::setBacklight(brightness);
   bootButton.begin();
   pwrButton.begin();
   startMotionTask();  // reads the IMU at 250 Hz on core 0
@@ -226,6 +251,18 @@ void loop() {
   float jolt = 0;
   bool motionOk = latestMotion(m, jolt);
   if (jolt > peakJoltShown) peakJoltShown = jolt;
+
+  static uint32_t lastOrientation = 0;
+  if (motionOk) updateOrientation(m, lastOrientation ? (t0 - lastOrientation) / 1e6f : 0.0f);
+  lastOrientation = t0;
+
+  if (faceDown) {
+    // Dark and idle: skip drawing, check the sensor ~20 times a second.
+    // The water simply resumes when the necklace is picked up.
+    lastFrameStart = 0;  // don't count the pause in the FPS
+    delay(50);
+    return;
+  }
 
   if (screen == Screen::Diagnostics) {
     diagnosticsFrame(m, motionOk, t0);

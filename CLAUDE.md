@@ -25,9 +25,16 @@ backup/                       factory firmware dump (git-ignored)
 - ESP32 core esp32:esp32 3.3.12. GFX Library for Arduino 1.6.9 (in ~/Documents/Arduino/libraries).
 - esptool: `~/Library/Arduino15/packages/esp32/tools/esptool_py/<ver>/esptool`. The version changes on core upgrades, so glob for it.
 
+## Git / GitHub
+- Public repo: https://github.com/Maloffstrano/wave_necklace (the user's **personal** account Maloffstrano, never a work account).
+- `gh` is at `~/bin/gh` (not on PATH), signed in as Maloffstrano.
+- Repo-local git config: identity `Maloffstrano <Maloffstrano@users.noreply.github.com>`, and a credential helper using `~/bin/gh auth git-credential`. There is no global git config; keep it that way.
+- MIT licence. README credits Waveshare and Adafruit; keep them when editing.
+
 ## Board quirks
 - **Partition scheme:** the board's default `esp_sr_16` fails to upload (expects a speech model `srmodels.bin`). Use `PartitionScheme=app3M_fat9M_16MB`.
-- `CDCOnBoot=cdc` so Serial goes over native USB (`/dev/cu.usbmodem101`).
+- `CDCOnBoot=cdc` so Serial goes over native USB. The port name depends on which Mac USB socket is used (seen: `/dev/cu.usbmodem101`, `/dev/cu.usbmodem1101`). Update `default_port` in each sketch.yaml if uploads say the port doesn't exist.
+- Reading serial without the IDE: `stty -f <port> 115200 raw; cat <port>` (kill it after a few seconds). `arduino-cli monitor` exits immediately when stdin isn't a terminal.
 - A large `read-flash` at `-b 921600` failed with serial corruption, but the default baud works.
 - Chip: ESP32-S3R8 (8MB PSRAM, OPI), 16MB flash.
 
@@ -48,14 +55,17 @@ backup/                       factory firmware dump (git-ignored)
 - Reference drivers are in Waveshare's demo zip (Google Drive link on the wiki, about 200 MB), under `Arduino/examples/LVGL_Arduino/`. It also has QMI8658 IMU code (Gyro_QMI8658.cpp), which will be useful for ocean_wave.
 - Touch: CST816 at 0x15. Register 0x02 = finger count. Write non-zero to 0xFE to disable auto-sleep.
 - Backlight: LEDC on GPIO5, 20 kHz, 10-bit; duty 1024 = fully on.
+- Buttons: BOOT = GPIO0 (active low, free after boot); PWR = GPIO6 (active low); RST is a hardware reset. **Power latch GPIO7 must be HIGH or the board turns off on battery when PWR is released.** NecklaceBoard::begin() sets it; powerOff() clears it.
+- ocean_wave controls: BOOT short press toggles Wave/Diagnostics screens; hold PWR 2 s = power off. A short PWR press is still free.
 - Fonts: the built-in font looks blocky when scaled. Use GFXfont files (Adafruit FreeFonts with the `#include <Adafruit_GFX.h>` line removed). They draw no background, so recolouring identical text is flicker-free, but changing the text needs an erase.
 
 ## Status and next steps (as of 2026-11-10)
 - hello_world_test works: rainbow text, dot every 1 s, tap cycles 4 backlight levels.
 - User feedback: the dimmest level (duty 10/1024) is right for a dark room. Keep it.
 - Likely change: 3 brightness levels (3 taps per cycle). Slide-to-dim was judged overkill.
-- The user is creating a **public** GitHub repo from this whole folder. The README must credit **Waveshare** (panel init sequences derived from their demo) and **Adafruit** (FreeSansBold18pt7b font, BSD licence).
-- Next: build ocean_wave (wave simulation driven by the IMU).
+- **This board's accelerometer was stuck (2026-11-11):** ay was pinned at full scale on every range (+4/+8/+16 g) and ax/az were wrong. Waveshare's factory firmware showed the same, so it's hardware. It later came unstuck (|a| reads about 0.98 g at rest) after tapping, a factory-firmware run (8 kHz ODR) and soft resets, which fits MEMS stiction. It may stick again after a knock. The code should sanity-check |a| (about 1 g at rest) and fall back to the gyro if the accelerometer is implausible. The gyro has always worked.
+- **Reminder for Claude:** before designing orientation handling, grill the user on what the display should do when the necklace lies flat on a table (gravity is mostly along Z, so there's no clear "down" on screen).
+- Next: build ocean_wave (wave simulation driven by the IMU). Show frame time and FPS from the first version. The user may switch to Claude Fable 5.2 if more performance is needed, so decide on measured numbers.
 
 ## Backup
 - `backup/factory_firmware_16MB.bin`: full flash dump of the factory firmware (2026-11-10), not in git. To restore it:

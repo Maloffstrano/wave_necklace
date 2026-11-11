@@ -72,7 +72,7 @@ void loop() {
 ## Credits
 
 - **Waveshare**: the ST77916 panel init sequences in `libraries/NecklaceBoard/src/st77916_waveshare_init.h`, and the panel revision detection, are derived from Waveshare's ESP32-S3-Touch-LCD-1.85 demo code ([wiki](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.85)). `tools/convert_waveshare_init.py` converts them from Waveshare's format.
-- **Adafruit**: `hello_world_test/FreeSansBold18pt7b.h` comes from the [Adafruit GFX Library](https://github.com/adafruit/Adafruit-GFX-Library) (BSD licence), which converted it from GNU FreeFont.
+- **Adafruit**: the GFX fonts (`hello_world_test/FreeSansBold18pt7b.h`, `ocean_wave/FreeSans12pt7b.h`) come from the [Adafruit GFX Library](https://github.com/adafruit/Adafruit-GFX-Library) (BSD licence), which converted them from GNU FreeFont.
 - **moononournation**: [GFX Library for Arduino](https://github.com/moononournation/Arduino_GFX) drives the display.
 
 ## Licence

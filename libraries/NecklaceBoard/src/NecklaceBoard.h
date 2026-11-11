@@ -26,6 +26,13 @@ constexpr int PIN_I2C_SCL = 10;
 constexpr int PIN_TP_SDA = 1;    // Wire1: CST816 touch
 constexpr int PIN_TP_SCL = 3;
 constexpr int PIN_TP_INT = 4;
+constexpr int PIN_BTN_BOOT = 0;  // BOOT button, LOW when pressed (free after boot)
+constexpr int PIN_BTN_PWR = 6;   // PWR button, LOW when pressed
+constexpr int PIN_PWR_LATCH = 7; // HIGH keeps the board powered from the battery
+
+// QSPI clock for the display. Waveshare's demo uses 80 MHz; a full
+// 360x360 RGB565 frame then takes about 6.5 ms on the wire.
+constexpr int32_t DISPLAY_SPI_HZ = 80000000;
 
 // ---- Backlight ----
 constexpr uint32_t BACKLIGHT_FREQ = 20000;
@@ -45,5 +52,46 @@ void setBacklight(uint16_t duty);
 
 // True while a finger is on the screen.
 bool isTouched();
+
+// ---- Buttons and power ----
+// Cuts battery power (releases the power latch). On USB power the board keeps running.
+void powerOff();
+
+// A push button (active low). Presses are caught by a GPIO interrupt, so a
+// quick tap is never missed, however long a frame takes.
+class Button {
+ public:
+  explicit Button(int pin) : pin_(pin) {}
+  // Starts watching the pin. Call once, after NecklaceBoard::begin().
+  void begin();
+  // True once for each press (debounced).
+  bool pressed();
+  // True while the button has been held for at least ms milliseconds.
+  // Returns true only once per hold.
+  bool heldFor(uint32_t ms);
+
+ private:
+  static void IRAM_ATTR onEdge(void *arg);
+  int pin_;
+  volatile uint32_t pressCount_ = 0;
+  volatile uint32_t lastEdgeMs_ = 0;   // any edge, press or release
+  volatile uint32_t pressedAtMs_ = 0;
+  uint32_t seenCount_ = 0;
+  uint32_t holdHandledCount_ = UINT32_MAX;
+};
+
+// ---- Motion (QMI8658 6-axis IMU) ----
+// Raw sensor axes, as the chip reports them. How they map onto the screen
+// is decided by the sketch.
+struct Motion {
+  float ax, ay, az;  // acceleration in g (gravity alone reads 1 g)
+  float gx, gy, gz;  // rotation rate in degrees per second
+};
+
+// True if the IMU answered during begin().
+bool imuReady();
+
+// Reads the latest accelerometer and gyro sample (250 Hz). Returns false on an I2C error.
+bool readMotion(Motion &m);
 
 }  // namespace NecklaceBoard

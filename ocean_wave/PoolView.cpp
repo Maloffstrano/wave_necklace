@@ -9,9 +9,8 @@
 //
 // Ripples come from:
 //   - a finger: one drop where it lands
-//   - a bump: small jolts drop a few ripples at random spots; a bang on the
-//     table sends a ring in from the whole rim that focuses at the centre
-// (No random drops: the user found taps and bumps entertaining enough, and
+//   - a sharp jab: a ring in from the whole rim that focuses at the centre
+// (No random drops: the user found taps and jabs entertaining enough, and
 // still water in a still bowl is right.)
 //
 // ---- The look ----
@@ -42,15 +41,14 @@ const float DAMPING = 0.8f;           // 1/s: how quickly ripples fade
 const float LIGHT_GAIN = 9.0f;        // palette steps per px of height difference
 
 const float TOUCH_DROP = 6.0f;        // px: ripple from a fresh touch
-const float JOLT_THRESHOLD = 0.1f;    // g (same as the side view)
-const float RING_JOLT = 0.6f;         // g: harder than this rings the whole rim
-const float BUMP_DROP = 5.0f;         // px per sqrt(g) of jolt
+const float RING_JOLT = 0.6f;         // g: a jab harder than this rings the whole rim
 const float RING_GAIN = 2.0f;         // px per sqrt(g) of jolt
 const float SETTLE_TIME = 1.5f;       // s after the pool appears: ignore bumps (it's being set down)
 const float TOUCH_QUIET = 0.3f;       // s after a finger lands: ignore bumps (the tap shook the board)
 
 const float DOWN_SMOOTHING = 1.0f;    // s: how slowly "down" follows the tip when flat
 const float MIN_TIP = 0.01f;          // g: flatter than this, keep the last "down"
+const float TURN_RATE = 1.5f;         // rad/s: fastest the light area swings round (about 90 deg/s)
 
 // ---- Colours ----
 // The middle of the palette (DEEP..SURFACE) is the side view's depth ramp,
@@ -86,14 +84,6 @@ void buildPalette() {
       palette[ph][i] = panelColor(rgb565(r + off, g + off, b + off));
     }
   }
-}
-
-uint32_t rngState = 0x9E3779B9;
-float random01() {
-  rngState ^= rngState << 13;
-  rngState ^= rngState >> 17;
-  rngState ^= rngState << 5;
-  return (rngState & 0xFFFFFF) / 16777216.0f;
 }
 
 }  // namespace
@@ -170,10 +160,20 @@ void PoolView::update(float dt, float jolt, float gx, float gy) {
   float a = 1.0f - expf(-dt / DOWN_SMOOTHING);
   tipX_ += (gx - tipX_) * a;
   tipY_ += (gy - tipY_) * a;
+  // Turn "down" towards the tip at a limited speed. Tipping the other way
+  // passes through "exactly flat", where the direction is lost; without the
+  // limit, the light area would freeze there and then jump across.
   float tip = sqrtf(tipX_ * tipX_ + tipY_ * tipY_);
   if (tip > MIN_TIP) {
-    downX_ = tipX_ / tip;
-    downY_ = tipY_ / tip;
+    float tx = tipX_ / tip, ty = tipY_ / tip;
+    float angle = atan2f(downX_ * ty - downY_ * tx, downX_ * tx + downY_ * ty);  // signed, -PI..PI
+    float maxTurn = TURN_RATE * dt;
+    angle = fminf(fmaxf(angle, -maxTurn), maxTurn);
+    float c = cosf(angle), sn = sinf(angle);
+    float nx = downX_ * c - downY_ * sn, ny = downX_ * sn + downY_ * c;
+    float n = sqrtf(nx * nx + ny * ny);
+    downX_ = nx / n;
+    downY_ = ny / n;
   }
 
   // A tap on a hand-held necklace shakes it: that jolt is the tap, not a
@@ -191,15 +191,9 @@ void PoolView::update(float dt, float jolt, float gx, float gy) {
     settleTimer_ -= dt;
     jolt = 0;  // still being set down: that bump isn't a splash
   }
-  if (jolt > RING_JOLT) {
-    ring(RING_GAIN * sqrtf(jolt));
-  } else if (jolt > JOLT_THRESHOLD) {
-    int n = 1 + (int)(jolt * 6);
-    for (int k = 0; k < n; k++) {
-      float a = random01() * 2 * PI, r = sqrtf(random01()) * (RADIUS_CELLS - 4);
-      drop(CENTRE + r * cosf(a), CENTRE + r * sinf(a), 2.5f, BUMP_DROP * sqrtf(jolt));
-    }
-  }
+  // Only a sharp jab disturbs the pool: smaller bumps come from handling it
+  // (turning it on the table), and drops scattered by those looked random.
+  if (jolt > RING_JOLT) ring(RING_GAIN * sqrtf(jolt));
 
 
   stepTimer_ += dt;

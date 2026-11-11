@@ -42,6 +42,15 @@ class SideView {
 
   void step(float dt, float aSide);
   void splash(float jolt);
+
+  // ---- Spray and curl particles (see SideView.cpp) ----
+  float surfaceAt(float u) const;  // surface height (v, px) at position u across the bowl
+  void emit(float u, float v, float vu, float vv, uint8_t kind, float life);
+  void emitWallCurl(int side, float dt);
+  void emitCrestSpray(float dt);
+  void updateParticles(float dt);
+  void prepareParticles();
+  void drawParticles(uint16_t *pixels, int16_t y0, int16_t rows) const;
   void updateFoam(float dt);
   void prepareRender();
   void render(uint16_t *pixels, int16_t y0, int16_t rows) const;
@@ -57,6 +66,24 @@ class SideView {
   float dropTimer_ = 1.0f;      // s until the next random disturbance
   float quietTime_ = 0;         // s since the last splash or real motion
   float stillTime_ = 0;         // s the water has been visibly still
+  float damping_ = 0.9f;        // current damping, 1/s (rises when the water churns)
+  float particleBudget_ = 120;  // particles that may be emitted right now
+  float hPrev_[N] = {};         // surface heights last update, for the rise rate
+  float rate_[N] = {};          // how fast each cell's surface is rising, px/s
+
+  struct Particle {
+    float u, v;    // position in the water frame (px): u across, v up
+    float vu, vv;  // velocity, px/s
+    float life;    // seconds left
+    uint8_t kind;  // 0 = dead, 1 = curl sheet, 2 = droplet
+  };
+  static constexpr int MAX_PARTICLES = 480;
+  Particle particles_[MAX_PARTICLES] = {};
+  int nextParticle_ = 0;
+  // Screen-space copy for rendering
+  struct Dot { int16_t x, y; uint8_t r; uint16_t color; };
+  Dot dots_[MAX_PARTICLES];
+  int dotCount_ = 0;
 
   // Per-frame render data, one entry per 1 px step across the bowl (u).
   // Wider than the bowl (+-256 px) so rotated corner pixels stay in range.

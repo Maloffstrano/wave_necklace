@@ -128,7 +128,7 @@ void diagnosticsFrame(const Motion &m, bool motionOk, uint32_t t0) {
 // ============================================================================
 
 SideView water;
-const int16_t LABEL_W = 170, LABEL_H = 26;
+const int16_t LABEL_W = 230, LABEL_H = 26;  // fits inside the circle at this height
 const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - 70;
 bool showFpsLabel = true;
 
@@ -154,11 +154,12 @@ void updateFpsLabel() {
   static uint32_t lastLabel = 0;
   if (millis() - lastLabel < 250) return;  // 4 updates a second is plenty
   lastLabel = millis();
-  char buf[32];
+  char buf[40];
   label->fillScreen(RGB565_BLACK);
   label->setFont(&FreeSans12pt7b);
   label->setTextColor(RGB565_YELLOW);
-  snprintf(buf, sizeof(buf), "%.1f fps  cpu %.1f", fpsSmoothed, renderCpuUs / 1000.0f);
+  // render = CPU time spent drawing this frame's pixels (not waiting on DMA)
+  snprintf(buf, sizeof(buf), "%.0f fps  render %.1fms", fpsSmoothed, renderCpuUs / 1000.0f);
   label->setCursor(4, LABEL_H - 7);
   label->print(buf);
 }

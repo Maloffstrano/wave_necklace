@@ -207,6 +207,18 @@ void SideView::begin() {
   rngState ^= esp_random();
 }
 
+void SideView::setDown(float x, float y) {
+  float n = sqrtf(x * x + y * y);
+  if (n < 1e-3f) return;
+  downX_ = x / n;
+  downY_ = y / n;
+  // Gravity "as last seen" along the same line, so no sideways push is
+  // felt from the switch itself; the water then follows the real tilt.
+  lastGx_ = downX_;
+  lastGy_ = downY_;
+  slowSide_ = 0;
+}
+
 void SideView::setLean(float leanDeg) {
   float t = (leanDeg - LEAN_RISE_START) / (LEAN_RISE_END - LEAN_RISE_START);
   t = fminf(fmaxf(t, 0.0f), 1.0f);

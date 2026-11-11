@@ -87,7 +87,10 @@ void updateOrientation(const Motion &m, float dt) {
     pool.reset();  // fresh, calm water (the side view's was nearly still at this lean)
     pool.setDown(water.downX(), water.downY());  // carry on the side view's colours
   }
-  else if (poolMode && leanSmoothed < POOL_EXIT) poolMode = false;
+  else if (poolMode && leanSmoothed < POOL_EXIT) {
+    poolMode = false;
+    water.setDown(pool.downX(), pool.downY());  // start where the pool's light area was
+  }
 }
 
 // ---- Screens and buttons ----

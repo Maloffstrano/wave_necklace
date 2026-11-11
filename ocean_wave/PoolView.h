@@ -23,6 +23,8 @@ class PoolView {
   // Start from this "down" direction (screen coordinates), e.g. the side
   // view's when switching over, so the colours carry on seamlessly.
   void setDown(float x, float y);
+  float downX() const { return downX_; }
+  float downY() const { return downY_; }
 
   // A finger on the screen at (x, y) in pixels. Call every frame while it's
   // down: a new touch drops one ripple.

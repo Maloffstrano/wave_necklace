@@ -35,6 +35,10 @@ class SideView {
   // NecklaceBoard::StripRenderer: pass the SideView as ctx.
   static void renderStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *ctx);
 
+  // Start from this "down" direction (screen coordinates), e.g. the pool's
+  // when switching back, so the colours carry on seamlessly.
+  void setDown(float x, float y);
+
   // Smoothed "down" direction in screen coordinates (unit vector).
   float downX() const { return downX_; }
   float downY() const { return downY_; }

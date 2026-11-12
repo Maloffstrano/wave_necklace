@@ -7,3 +7,6 @@ build/
 *.map
 
 .DS_Store
+
+# 3D models and drawings for the case (Waveshare files, kept local)
+3D/

@@ -11,6 +11,7 @@ hello_world_test/             first test sketch: rainbow text, edge dot, tap-to-
 ocean_wave/                   the real project (currently a placeholder)
 tools/                        convert_waveshare_init.py (regenerates the panel init header)
 backup/                       factory firmware dump (git-ignored)
+3D/                           Waveshare STEP model + drawings for case design (git-ignored; links in things-I-learned.md)
 ```
 - Each sketch folder has its own `sketch.yaml` (FQBN + port).
 - Board code goes in NecklaceBoard. Sketches keep only app logic (e.g. brightness levels, drawing).

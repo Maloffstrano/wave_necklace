@@ -15,10 +15,16 @@
 // (a_side): rotate or jolt the necklace and the water sloshes, then settles.
 #pragma once
 #include <NecklaceBoard.h>
+#include "Material.h"
 
 class SideView {
  public:
   void begin();
+
+  // The fluid: physics, splashes, curl, foam and colours (Material.h).
+  // Rebuilds the colour tables, so it can be called every frame while
+  // blending between materials.
+  void setMaterial(const Material &m);
 
   // Calm water: clears all waves and foam.
   void reset();
@@ -62,6 +68,9 @@ class SideView {
   void updateFoam(float dt);
   void prepareRender();
   void render(uint16_t *pixels, int16_t y0, int16_t rows) const;
+
+  Material m_ = WATER;  // the fluid
+  float g_ = 0;         // wave model gravity, from m_ (waveSpeed^2 / depth)
 
   // Simulation state
   float h_[N] = {};        // surface height per cell, px above the rest level

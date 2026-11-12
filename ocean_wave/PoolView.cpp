@@ -33,16 +33,11 @@ using namespace NecklaceBoard;
 
 namespace {
 
-// ---- Tuning ----
-const float RIPPLE_SPEED = 160.0f;    // px/s (about the side view's wave speed)
+// ---- The bowl ----
+// The fluid's tuning (ripple speed, damping, lighting, tap and jab strength,
+// colours) is in Material.h / Material.cpp.
 const float STEP_RATE = 120.0f;       // physics steps per second
-const float K = (RIPPLE_SPEED / STEP_RATE / 4) * (RIPPLE_SPEED / STEP_RATE / 4);  // 4 = CELL
-const float DAMPING = 0.8f;           // 1/s: how quickly ripples fade
-const float LIGHT_GAIN = 9.0f;        // palette steps per px of height difference
-
-const float TOUCH_DROP = 6.0f;        // px: ripple from a fresh touch
 const float RING_JOLT = 0.6f;         // g: a jab harder than this rings the whole rim
-const float RING_GAIN = 2.0f;         // px per sqrt(g) of jolt
 const float SETTLE_TIME = 1.5f;       // s after the pool appears: ignore bumps (it's being set down)
 const float TOUCH_QUIET = 0.3f;       // s after a finger lands: ignore bumps (the tap shook the board)
 
@@ -50,34 +45,39 @@ const float DOWN_SMOOTHING = 1.0f;    // s: how slowly "down" follows the tip wh
 const float MIN_TIP = 0.01f;          // g: flatter than this, keep the last "down"
 const float TURN_RATE = 1.5f;         // rad/s: fastest the light area swings round (about 90 deg/s)
 
-// ---- Colours ----
+// ---- Colours, built from the material ----
 // The middle of the palette (DEEP..SURFACE) is the side view's depth ramp,
-// from navy to the light blue just under the surface. Below it, shadow;
-// above it, glints running into white.
+// from deep to the colour just under the surface. Below it, shadow; above
+// it, glints.
 const int PALETTE = 128;
 const int DEEP = 16, SURFACE = 111;   // palette range of the side view's colours
 uint16_t palette[2][PALETTE];         // two dither phases
-// Must match SideView: full level (195 px above centre) and its depth ramp.
+// Must match SideView's full level (195 px above centre).
 const float FULL_LEVEL = 195.0f;
-const float DEPTH_RANGE = 190.0f;     // px: deeper than this is full navy
 
 uint16_t rgb565(float r, float g, float b) {  // components 0..255
   auto c = [](float v, int maxv) { int i = (int)(v + 0.5f); return i < 0 ? 0 : (i > maxv ? maxv : i); };
   return (uint16_t)((c(r * 31 / 255, 31) << 11) | (c(g * 63 / 255, 63) << 5) | c(b * 31 / 255, 31));
 }
 
-void buildPalette() {
+void buildPalette(const Material &m) {
   for (int i = 0; i < PALETTE; i++) {
     float r, g, b;
     if (i < DEEP) {  // shadow: darker than the deepest water
       float t = (float)i / DEEP;
-      r = 2 + 8 * t; g = 8 + 22 * t; b = 25 + 45 * t;
+      r = m.poolShadow.r + (m.deep.r - m.poolShadow.r) * t;
+      g = m.poolShadow.g + (m.deep.g - m.poolShadow.g) * t;
+      b = m.poolShadow.b + (m.deep.b - m.poolShadow.b) * t;
     } else if (i <= SURFACE) {  // SideView's depth colours (near = 0 deep .. 1 surface)
       float near = (float)(i - DEEP) / (SURFACE - DEEP);
-      r = 10 + 40 * near * near; g = 30 + 150 * near; b = 70 + 170 * near;
-    } else {  // glints: surface blue -> white
+      r = m.deep.r + (m.surface.r - m.deep.r) * powf(near, m.curve.r);
+      g = m.deep.g + (m.surface.g - m.deep.g) * powf(near, m.curve.g);
+      b = m.deep.b + (m.surface.b - m.deep.b) * powf(near, m.curve.b);
+    } else {  // glints: surface -> glint
       float t = (float)(i - SURFACE) / (PALETTE - 1 - SURFACE);
-      r = 50 + 195 * t; g = 180 + 70 * t; b = 240 + 15 * t;
+      r = m.surface.r + (m.poolGlint.r - m.surface.r) * t;
+      g = m.surface.g + (m.poolGlint.g - m.surface.g) * t;
+      b = m.surface.b + (m.poolGlint.b - m.surface.b) * t;
     }
     for (int ph = 0; ph < 2; ph++) {
       float off = ph ? 2.0f : -2.0f;  // about +-1/4 of an RGB565 step, in 0..255 units
@@ -88,8 +88,15 @@ void buildPalette() {
 
 }  // namespace
 
+void PoolView::setMaterial(const Material &m) {
+  m_ = m;
+  float courant = m.rippleSpeed / STEP_RATE / CELL;
+  k_ = courant * courant;  // must stay below 0.5 (ripple speed below ~680 px/s)
+  buildPalette(m);
+}
+
 void PoolView::begin() {
-  buildPalette();
+  setMaterial(WATER);
   for (int j = 0; j < GRID; j++) {
     for (int i = 0; i < GRID; i++) {
       float dx = i - CENTRE, dy = j - CENTRE;
@@ -135,7 +142,7 @@ void PoolView::touch(int16_t x, int16_t y) {
   // One ripple where the finger lands (a held or dragged finger adds nothing:
   // single ripples invite more taps to watch them cross).
   if (!touching_) {
-    drop(cx, cy, 3.0f, TOUCH_DROP);
+    drop(cx, cy, 3.0f, m_.touchDrop);
     touchQuiet_ = TOUCH_QUIET;
     pendingJolt_ = 0;  // the jolt held back from last frame was this tap
   }
@@ -193,7 +200,7 @@ void PoolView::update(float dt, float jolt, float gx, float gy) {
   }
   // Only a sharp jab disturbs the pool: smaller bumps come from handling it
   // (turning it on the table), and drops scattered by those looked random.
-  if (jolt > RING_JOLT) ring(RING_GAIN * sqrtf(jolt));
+  if (jolt > RING_JOLT) ring(m_.ringGain * sqrtf(jolt));
 
 
   stepTimer_ += dt;
@@ -206,14 +213,14 @@ void PoolView::update(float dt, float jolt, float gx, float gy) {
 }
 
 void PoolView::step() {
-  const float keep = 1 - DAMPING / STEP_RATE;
+  const float keep = 1 - m_.rippleDamping / STEP_RATE;
   // prev_ becomes next in place: next = h + (h - prev)*keep + K*laplacian.
   for (int j = 1; j < GRID - 1; j++) {
     for (int i = 1; i < GRID - 1; i++) {
       if (!inside_[j][i]) continue;
       float hc = h_[j][i];
       float lap = h_[j][i - 1] + h_[j][i + 1] + h_[j - 1][i] + h_[j + 1][i] - 4 * hc;
-      prev_[j][i] = hc + (hc - prev_[j][i]) * keep + K * lap;
+      prev_[j][i] = hc + (hc - prev_[j][i]) * keep + k_ * lap;
     }
   }
   // Swap the buffers (cheap enough at 91x91 to copy; keeps indexing simple).
@@ -227,13 +234,13 @@ void PoolView::step() {
 }
 
 void PoolView::prepareRender() {
-  const float gain = LIGHT_GAIN * 256;
+  const float gain = m_.lightGain * 256;
   // Resting shade per cell: the full side view's depth below the surface.
   // Height above the centre along "up" is v = -(offset . down).
   for (int j = 0; j < GRID; j++) {
     for (int i = 0; i < GRID; i++) {
       float v = -((i - CENTRE) * downX_ + (j - CENTRE) * downY_) * CELL;
-      float near = 1 - fminf((FULL_LEVEL - v) / DEPTH_RANGE, 1.0f);
+      float near = 1 - fminf((FULL_LEVEL - v) / m_.depthRange, 1.0f);
       base_[j][i] = (int16_t)((DEEP + near * (SURFACE - DEEP)) * 256);
     }
   }

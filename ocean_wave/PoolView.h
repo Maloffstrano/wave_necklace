@@ -6,10 +6,15 @@
 // the upper left), smoothly interpolated between cells for every pixel.
 #pragma once
 #include <NecklaceBoard.h>
+#include "Material.h"
 
 class PoolView {
  public:
   void begin();
+
+  // The fluid: ripple speed, damping, lighting and colours (Material.h).
+  // Rebuilds the palette, so it can be called every frame while blending.
+  void setMaterial(const Material &m);
 
   // Calm water. Call when the pool appears; bumps are ignored for a moment
   // while the necklace is being set down.
@@ -52,6 +57,8 @@ class PoolView {
   int16_t base_[GRID][GRID] = {}; // resting shade (depth gradient along "down"), 8.8 fixed
   int16_t shade_[GRID][GRID] = {};// this frame's shade, 8.8 fixed (palette index * 256)
 
+  Material m_ = WATER;
+  float k_ = 0;                   // wave equation coefficient from the ripple speed
   float stepTimer_ = 0;
   float settleTimer_ = 0;         // s left in which bumps are ignored
   float touchQuiet_ = 0;          // s left in which bumps are ignored after a tap

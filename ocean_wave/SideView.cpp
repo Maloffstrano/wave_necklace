@@ -30,31 +30,32 @@
 // is fast or a crest is sharp, then fades. Only the visible circle is
 // rendered; the corners of the 360x360 square are filled with black.
 
-// ---- How the tuning constants affect each other ----
+// ---- How the fluid's tuning (Material.h) fits together ----
 // (The full version, with a table, is in things-I-learned.md.)
-// WAVE_SPEED is the hub: G = WAVE_SPEED^2 / DEPTH.
+// waveSpeed is the hub: G = waveSpeed^2 / depth.
 //   - Tilting: the sideways push is scaled by G, so how far the surface tilts
-//     does NOT depend on WAVE_SPEED. SENSITIVITY and SWELL_AMPLITUDE (in g)
+//     does NOT depend on waveSpeed. sensitivity and swellAmplitude (in g)
 //     behave the same at any speed.
-//   - Splashes and drops add flow (px/s). Wave height ~ flow * DEPTH / speed,
-//     so halving WAVE_SPEED doubles splash heights: SPLASH_GAIN, MAX_SPLASH
-//     and DROP_STRENGTH must come down with it.
-//   - How fast water climbs the wall (the rise rate) scales with WAVE_SPEED,
+//   - Splashes and drops add flow (px/s). Wave height ~ flow * depth / speed,
+//     so halving waveSpeed doubles splash heights: splashGain, maxSplash
+//     and dropStrength must come down with it.
+//   - How fast water climbs the wall (the rise rate) scales with waveSpeed,
 //     and everything driven by it follows:
-//       curl launch speed = rise * CURL_SPEED_GAIN; flight height ~ speed^2,
+//       curl launch speed = rise * curlSpeedGain; flight height ~ speed^2,
 //       so halving the waves quarters curl height unless the gain doubles
-//       curl density = rise * CURL_EMIT_RATE (also halves)
-//       crest spray (SPRAY_MIN_RISE) and whipped-up foam (flow * 0.012) fade
+//       curl density = rise * curlEmitRate (also halves)
+//       crest spray (sprayMinRise) and whipped-up foam (flow * foamFlowGain) fade
 //   - STILL_FLOW (when drops may start) is a flow speed: slower waves count as
 //     "still" sooner.
-//   - SUBSTEP must keep WAVE_SPEED * SUBSTEP / DX well below 1 (now 0.17).
-// Independent of WAVE_SPEED:
-//   - DAMPING (settling time in seconds; slower waves cross the bowl fewer
+//   - SUBSTEP must keep waveSpeed * SUBSTEP / DX well below 1 (now 0.17).
+// Independent of waveSpeed:
+//   - damping (settling time in seconds; slower waves cross the bowl fewer
 //     times before they settle, so they feel heavier)
-//   - PARTICLE_GRAVITY (curl height for a given launch speed, fall speed,
-//     and the loop-the-loop limit CURL_MAX_SPEED ~ sqrt(gravity * radius))
+//   - particleGravity (curl height for a given launch speed, fall speed,
+//     and the loop-the-loop limit curlMaxSpeed ~ sqrt(gravity * radius))
 //   - the lean level (REST_LEVEL..FULL_LEVEL), colours, foam fade.
-// PoolView copies FULL_LEVEL and the depth colour ramp: change them together.
+// PoolView copies FULL_LEVEL and uses the same depth colours: keep FULL_LEVEL
+// the same in both.
 
 // Pixel loops: Arduino builds with -Os (small code), which is slow for tight
 // inner loops. Optimise this file for speed instead.
@@ -66,7 +67,10 @@ using namespace NecklaceBoard;
 
 namespace {
 
-// ---- Tuning ----
+// ---- The bowl ----
+// The fluid's own tuning (wave speed, damping, splashes, the curl, foam and
+// colours) is in Material.h / Material.cpp. What's here is about the bowl
+// and is the same for any fluid.
 const float REST_LEVEL = -14.0f;      // rest surface height (px above the bowl centre): about 45% full
 // Leaning back shows more of the water (like looking into a glass from above):
 // the level rises from REST_LEVEL at LEAN_RISE_START to FULL_LEVEL at
@@ -74,32 +78,27 @@ const float REST_LEVEL = -14.0f;      // rest surface height (px above the bowl 
 const float LEAN_RISE_START = 40.0f;  // degrees: normal wear (+26..+34) stays unchanged
 const float LEAN_RISE_END = 80.0f;    // degrees
 const float FULL_LEVEL = 195.0f;      // px: above the rim (180), so the bowl is full before the pool takes over
-const float WAVE_SPEED = 165.0f;      // px/s: a wave crosses the bowl in about 2.2 s ("slow and stately")
-const float DEPTH = 100.0f;           // effective water depth for the wave equation, px
-const float G = WAVE_SPEED * WAVE_SPEED / DEPTH;  // so that c = sqrt(G * DEPTH)
-const float DAMPING = 0.9f;           // 1/s: how quickly sloshing dies down
 const float GRAVITY_SMOOTHING = 0.35f;  // s: how long the water takes to follow a new "down"
-const float SUBSTEP = 1.0f / 240.0f;  // s: keeps c * dt / dx well below 1 (stable)
+const float SUBSTEP = 1.0f / 240.0f;  // s: keeps waveSpeed * dt / dx well below 1 (stable)
 const float MAX_HEIGHT = 150.0f;      // clamp so extreme shakes can't blow up
-// Numerical diffusion: each substep nudges every cell toward the average of
-// its neighbours. It strongly damps the shortest wave the grid can hold
-// (neighbouring cells alternating up/down), which otherwise can grow into
-// spiky noise, while barely touching the big visible sloshing waves.
-const float SMOOTHING = 0.06f;
+// Numerical diffusion (Material::smoothing): each substep nudges every cell
+// toward the average of its neighbours. It strongly damps the shortest wave
+// the grid can hold (neighbouring cells alternating up/down), which otherwise
+// can grow into spiky noise, while barely touching the big sloshing waves.
 
 // Small motions: quick changes in sideways acceleration are boosted with a
-// square-root curve, so taps and footsteps make visible ripples while big
-// swings stay physical. Below the dead zone it's sensor noise: ignored.
+// square-root curve (Material::sensitivity), so taps and footsteps make
+// visible ripples while big swings stay physical. Below the dead zone it's
+// sensor noise: ignored.
 const float FAST_SMOOTHING = 0.15f;   // s: separates quick changes from steady tilt
-const float SENSITIVITY = 0.35f;      // boost = SENSITIVITY * sqrt(|change| in g)
 const float DEAD_ZONE = 0.004f;       // g
 const float MAX_BOOST = 0.25f;        // g
 
-// Ambient life, so still water never looks frozen.
-const float SWELL_AMPLITUDE = 0.012f; // g: a lazy, slowly drifting sideways push
+// Ambient life, so still water never looks frozen: a lazy swell
+// (Material::swellAmplitude) and, once it has been still for a while, small
+// drops (Material::dropStrength).
 const float SWELL_PERIOD = 2.5f;      // s: how often the swell picks a new target
 const float DROP_INTERVAL = 1.8f;     // s: average time between small random disturbances
-const float DROP_STRENGTH = 30.0f;    // px/s of flow added at one spot
 const float QUIET_BEFORE_DROPS = 3.0f;  // s without splashes or real motion before drops start
 const float ACTIVE_BOOST = 0.02f;     // g: a motion boost above this counts as real motion
 const float STILL_FLOW = 6.0f;        // px/s: every cell's flow below this counts as still
@@ -110,8 +109,6 @@ const float STILL_BEFORE_DROPS = 2.0f;  // s the water must stay still before a 
 // Measured on the desk: rest ~0 g, typing nearby 0.07 g, three-finger tap
 // 0.2 g, fist on the table > 2 g. 0.1 ignores typing but splashes on taps.
 const float JOLT_THRESHOLD = 0.1f;    // g
-const float SPLASH_GAIN = 90.0f;      // px/s of flow per sqrt(g) of jolt (lower now that waves are slower)
-const float MAX_SPLASH = 110.0f;      // px/s
 
 // Safety limits for violent shaking. Chosen so that normal tilting, rolling,
 // taps and bangs are unaffected; to be fine-tuned once it's worn on battery.
@@ -127,108 +124,87 @@ const float TURBULENT_DAMPING = 2.5f; // 1/s extra (churning water loses energy 
 // middle (where the wall curves back inward) is launched along the wall's
 // tangent: it shoots up, already heading inward, and gravity bends it over
 // into an arc that lands back on the water. A stream of those is the curl.
-const float PARTICLE_GRAVITY = 1000.0f;  // px/s^2 (independent of the wave model's G; sets curl height and fall speed)
+//   - A slow climb just runs smoothly up the wall; only climbs that launch
+//     faster than curlMinSpeed throw a tongue (220 px/s flies ~24 px).
+//   - Above about sqrt(gravity * R) pieces ride the wall over the top of the
+//     bowl ("loop-the-loop") instead of peeling off: curlMaxSpeed stays below.
+//   - The tongue is thick at the base and stretches thin as it climbs: pieces
+//     start spread over curlThickness px in from the wall; the ones nearest
+//     the wall are fastest, the inner ones slower, so they fall back first.
+//     Each starts as a fat blob and shrinks to a thin sheet.
+//   - Wall friction is per second, not per contact: a piece sliding along the
+//     wall touches it every frame. With gentle friction the sheet slows under
+//     gravity as it climbs and detaches once too slow to stay pressed against
+//     the curve (speed^2 / R < the part of gravity pulling it off). That
+//     detachment is the curl.
+//   - Landing pieces become flecks riding the surface, then fade.
 const float CURL_MIN_HEIGHT = -25.0f;    // px: contact point must be above this (v)
-const float CURL_SPEED_GAIN = 2.8f;      // launch speed = rise rate * this (doubled when the waves were halved)
-// A slow climb just runs smoothly up the wall (the surface shows that); only
-// launch a tongue when it will clearly leave the water: 220 px/s flies about
-// 24 px (v^2 / 2g) before falling back.
-const float CURL_MIN_SPEED = 220.0f;     // px/s
-// Above about sqrt(g * R) (~420 px/s) particles ride the wall over the top of
-// the bowl ("loop-the-loop") instead of peeling off into a curl.
-const float CURL_MAX_SPEED = 410.0f;     // px/s: just under the loop-the-loop limit
-const float CURL_EMIT_RATE = 0.04f;      // particles per frame per px/s of rise (doubled with the slower waves)
-// The water running up the wall is a tongue: thick at the base, stretching
-// thin as it climbs. Particles start spread over CURL_THICKNESS px in from the
-// wall; the ones nearest the wall are fastest (they're riding the wall), the
-// inner ones slower, so they fall back first and the tip stretches out. Each
-// starts as a fat blob and shrinks to a thin sheet as it ages.
-const float CURL_THICKNESS = 12.0f;      // px: how far in from the wall the tongue starts
-const float CURL_INNER_SLOWDOWN = 0.35f; // innermost particles launch this much slower
-const float CURL_LIFE = 2.0f;            // s
-const float CURL_BLOB_TIME = 0.45f;      // s: blobs shrink from fat to thin over this
-const int CURL_BLOB_R = 6;               // px: radius at launch
-const int CURL_SHEET_R = 2;              // px: radius once stretched out
-const float SPRAY_MIN_RISE = 220.0f;     // px/s: crests rising faster throw droplets
-const float SPRAY_CHANCE = 0.0003f;      // per frame, per px/s above the minimum
 const int MAX_SPRAY_PER_FRAME = 1;       // across the whole surface
-const float WALL_BOUNCE = 0.25f;         // share of speed kept bouncing off the wall
-// Friction is per second, not per contact: a particle sliding along the wall
-// touches it every frame. With gentle friction the sheet keeps its speed,
-// slows under gravity as it climbs, and detaches by itself once it is too
-// slow to stay pressed against the curve (speed^2 / R < the part of gravity
-// pulling it off the wall). That detachment is the curl.
-const float WALL_FRICTION = 1.2f;        // 1/s while sliding along the wall
-const float FOAM_MAX_PX = 3.0f;          // foam line: 1 px + up to this much more
-const float LANDING_FOAM = 0.6f;         // foam a landing particle leaves (0..1): about 2 px thicker
-// Spray doesn't vanish when it lands: it becomes a fleck of foam riding the
-// surface (up and down with it, drifting with the flow), then fades.
-const float FLECK_LIFE = 0.8f;           // s
 
-// ---- Colours (panel byte order) ----
+// ---- Colours (panel byte order), built from the material ----
 // The panel is RGB565: only 32 levels of red and blue. A smooth depth gradient
 // would show visible bands, so there are two tables offset by half a step,
 // alternated in a checkerboard (ordered dithering).
 const int MAX_DEPTH = 400;
 uint16_t depthColor[2][MAX_DEPTH];
 const int EDGE_LEVELS = 16;
-// Near the wall the froth fades from blue-white into the colour of the water
-// just under the surface, which is also the colour of the curl tongue at its
-// base, so the tongue grows out of the water body instead of out of a white
-// line. FOAM_SHADES steps from 0 (water, at the wall) to the last (full froth).
+// Near the wall the froth fades into the colour of the water just under the
+// surface, which is also the colour of the curl tongue at its base, so the
+// tongue grows out of the water body instead of out of a white line.
+// FOAM_SHADES steps from 0 (water, at the wall) to the last (full froth).
 const int FOAM_SHADES = 8;
 const float WALL_FADE_PX = 50.0f;  // width of the fade, measured from the wall
 uint16_t foamShade[FOAM_SHADES];
 uint16_t edgeColor[FOAM_SHADES][EDGE_LEVELS];  // each shade blended into the black sky, for anti-aliasing
-const uint16_t DROPLET_COLOR = panelColor(RGB565(240, 248, 255));
-// The curl tongue is water: it starts in the colour of the water just under
-// the surface (so its overlapping blobs merge into one smooth shape with the
-// water body), turns to the paler sheet colour as it thins and climbs, then
-// towards white as it flies apart as spray. Falling pieces are always pale.
+uint16_t dropletColor;
+// The curl tongue is the fluid itself: it starts in the colour just under the
+// surface (so its overlapping blobs merge into one smooth shape with the
+// body), turns to the sheet colour as it thins and climbs, then to the spray
+// colour as it flies apart. Falling pieces are always spray coloured.
 const int CURL_SHADES = 12;
-const float CURL_SHADE_TIME = 0.9f;   // s from water colour to spray white
 uint16_t curlShade[CURL_SHADES];
-const int CURL_FALLING_SHADE = CURL_SHADES - 1;  // falling pieces: spray white
+const int CURL_FALLING_SHADE = CURL_SHADES - 1;
 const uint16_t SKY_COLOR = 0;
 
 uint16_t rgb565(float r, float g, float b) {
   auto c = [](float v, float maxv) { int i = (int)(v + 0.5f); return i < 0 ? 0 : (i > maxv ? (int)maxv : i); };
   return (uint16_t)((c(r, 31) << 11) | (c(g, 63) << 5) | c(b, 31));
 }
+uint16_t toPanel(const Rgb &c) {  // 0..255 components -> panel colour
+  return panelColor(rgb565(c.r * 31 / 255, c.g * 63 / 255, c.b * 31 / 255));
+}
+Rgb blend(const Rgb &a, const Rgb &b, float t) {
+  return {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t};
+}
 
-void buildColors() {
+void buildColors(const Material &m) {
   for (int d = 0; d < MAX_DEPTH; d++) {
-    // Light, slightly green-blue near the surface; deep navy further down.
-    float t = fminf(d / 190.0f, 1.0f);
+    // Surface colour just under the surface, deepening to `deep`.
+    float t = fminf(d / m.depthRange, 1.0f);
     float near = 1 - t;
-    float r = 10 + 40 * near * near;  // 0..255
-    float g = 30 + 150 * near;
-    float b = 70 + 170 * near;
+    float r = m.deep.r + (m.surface.r - m.deep.r) * powf(near, m.curve.r);  // 0..255
+    float g = m.deep.g + (m.surface.g - m.deep.g) * powf(near, m.curve.g);
+    float b = m.deep.b + (m.surface.b - m.deep.b) * powf(near, m.curve.b);
     for (int k = 0; k < 2; k++) {
       float off = k ? 0.25f : -0.25f;  // +-1/4 of a step: the two dither phases
       depthColor[k][d] = panelColor(rgb565(r * 31 / 255 + off, g * 63 / 255 + off, b * 31 / 255 + off));
     }
   }
-  // Water just under the surface (depth 0 above), the base of everything below.
-  const float WR = 50, WG = 180, WB = 240;
-  // Curl shades: water -> sheet blue (140, 205, 245) -> spray (200, 235, 255).
+  // Curl shades: surface -> sheet -> spray.
   for (int c = 0; c < CURL_SHADES; c++) {
-    float t = (float)c / (CURL_SHADES - 1) * 2;  // 0..1 water->sheet, 1..2 sheet->spray
-    float r, g, b;
-    if (t <= 1) { r = WR + (140 - WR) * t; g = WG + (205 - WG) * t; b = WB + (245 - WB) * t; }
-    else { t -= 1; r = 140 + 60 * t; g = 205 + 30 * t; b = 245 + 10 * t; }
-    curlShade[c] = panelColor(rgb565(r * 31 / 255, g * 63 / 255, b * 31 / 255));
+    float t = (float)c / (CURL_SHADES - 1) * 2;  // 0..1 surface->sheet, 1..2 sheet->spray
+    curlShade[c] = toPanel(t <= 1 ? blend(m.surface, m.sheet, t) : blend(m.sheet, m.spray, t - 1));
   }
-  // Froth shades: water colour at the wall -> froth (205, 232, 252).
+  // Froth shades: surface colour at the wall -> froth.
   for (int f = 0; f < FOAM_SHADES; f++) {
-    float t = (float)f / (FOAM_SHADES - 1);
-    float r = WR + (205 - WR) * t, g = WG + (232 - WG) * t, b = WB + (252 - WB) * t;
-    foamShade[f] = panelColor(rgb565(r * 31 / 255, g * 63 / 255, b * 31 / 255));
+    Rgb c = blend(m.surface, m.froth, (float)f / (FOAM_SHADES - 1));
+    foamShade[f] = toPanel(c);
     for (int k = 0; k < EDGE_LEVELS; k++) {
       float a = (k + 0.5f) / EDGE_LEVELS;  // share of the pixel covered by water
-      edgeColor[f][k] = panelColor(rgb565(r * a * 31 / 255, g * a * 63 / 255, b * a * 31 / 255));
+      edgeColor[f][k] = toPanel({c.r * a, c.g * a, c.b * a});
     }
   }
+  dropletColor = toPanel(m.droplet);
 }
 
 uint32_t rngState = 0x12345678;
@@ -251,8 +227,14 @@ float softClip(float x) {
 }  // namespace
 
 void SideView::begin() {
-  buildColors();
+  setMaterial(WATER);
   rngState ^= esp_random();
+}
+
+void SideView::setMaterial(const Material &m) {
+  m_ = m;
+  g_ = m.waveSpeed * m.waveSpeed / m.depth;  // so that waves travel at c = sqrt(G * depth)
+  buildColors(m);
 }
 
 void SideView::setDown(float x, float y) {
@@ -279,7 +261,7 @@ void SideView::reset() {
   for (int j = 0; j <= N; j++) q_[j] = 0;
   slowSide_ = swell_ = swellTarget_ = 0;
   quietTime_ = stillTime_ = 0;
-  damping_ = DAMPING;
+  damping_ = m_.damping;
   particleBudget_ = PARTICLE_BURST;
   for (auto &p : particles_) p.kind = 0;
   for (int i = 0; i < N; i++) hPrev_[i] = rate_[i] = 0;
@@ -288,7 +270,7 @@ void SideView::reset() {
 
 void SideView::splash(float jolt) {
   // The square root makes small taps visible without big bangs exploding.
-  float strength = fminf(SPLASH_GAIN * sqrtf(jolt - JOLT_THRESHOLD), MAX_SPLASH);
+  float strength = fminf(m_.splashGain * sqrtf(jolt - JOLT_THRESHOLD), m_.maxSplash);
   // Kick two of the bowl's natural sloshing shapes (standing waves that fit
   // between the walls), each with a random strength and direction. That
   // looks like water being thrown about, rather than random noise.
@@ -299,11 +281,11 @@ void SideView::splash(float jolt) {
       q_[j] += amp * sinf(PI * mode * j / N);
     }
   }
-  float foam = fminf(strength / MAX_SPLASH, 1.0f);
+  float foam = fminf(strength / m_.maxSplash, 1.0f);
   for (int i = 0; i < N; i++) foam_[i] = fmaxf(foam_[i], foam * (0.5f + 0.5f * random01()));
 
   // A burst of droplets thrown up from random spots on the surface.
-  int drops = (int)(25 * foam);
+  int drops = (int)(m_.splashDroplets * foam);
   for (int n = 0; n < drops; n++) {
     float u = (random01() * 2 - 1) * RADIUS * 0.9f;
     float up = strength * (0.8f + 1.2f * random01());
@@ -355,23 +337,23 @@ void SideView::emitWallCurl(int side, float dt) {
   if (cell < 0) cell = 0;
   if (cell > N - 1) cell = N - 1;
   float rise = rate_[cell];
-  if (rise * CURL_SPEED_GAIN < CURL_MIN_SPEED) return;
+  if (rise * m_.curlSpeedGain < m_.curlMinSpeed) return;
 
   // Tangent to the wall, pointing up: (-v, u)/R on the right, (v, -u)/R on the left.
   float tu = side > 0 ? -v / RADIUS : v / RADIUS;
   float tv = side > 0 ? u / RADIUS : -u / RADIUS;
-  float speed = fminf(rise * CURL_SPEED_GAIN, CURL_MAX_SPEED);
-  float count = rise * CURL_EMIT_RATE * (dt * 60);  // about the same per second at any FPS
+  float speed = fminf(rise * m_.curlSpeedGain, m_.curlMaxSpeed);
+  float count = rise * m_.curlEmitRate * (dt * 60);  // about the same per second at any FPS
   int n = (int)count + (random01() < count - (int)count ? 1 : 0);
   // Inward normal (towards the bowl centre) at the contact point.
   float nu = -u / RADIUS, nv = -v / RADIUS;
   for (int k = 0; k < n; k++) {
     float depth = random01();  // 0 = against the wall, 1 = innermost
-    float s = speed * (1 - CURL_INNER_SLOWDOWN * depth) * (0.95f + 0.1f * random01());
-    float in = 1.5f + depth * CURL_THICKNESS;
+    float s = speed * (1 - m_.curlInnerSlowdown * depth) * (0.95f + 0.1f * random01());
+    float in = 1.5f + depth * m_.curlThickness;
     float along = random01() * 4;  // spread a little along the wall
     emit(u + nu * in + tu * along, v + nv * in + tv * along,
-         tu * s, tv * s, 1, CURL_LIFE);
+         tu * s, tv * s, 1, m_.curlLife);
   }
   foam_[cell] = fmaxf(foam_[cell], fminf(rise / 600, 0.5f));
 }
@@ -380,9 +362,9 @@ void SideView::emitCrestSpray(float dt) {
   int emitted = 0;
   for (int i = 2; i < N - 2 && emitted < MAX_SPRAY_PER_FRAME; i++) {
     float rise = rate_[i];
-    if (rise < SPRAY_MIN_RISE) continue;
+    if (rise < m_.sprayMinRise) continue;
     if (h_[i] < h_[i - 1] || h_[i] < h_[i + 1]) continue;  // only from crests
-    float chance = (rise - SPRAY_MIN_RISE) * SPRAY_CHANCE * (dt * 60);
+    float chance = (rise - m_.sprayMinRise) * m_.sprayChance * (dt * 60);
     if (random01() > chance) continue;
     float u = -RADIUS + i * DX;
     float flow = 0.5f * (q_[i] + q_[i + 1]);
@@ -411,7 +393,7 @@ void SideView::updateParticles(float dt) {
       p.v = surfaceAt(p.u);
       continue;
     }
-    p.vv -= PARTICLE_GRAVITY * dt;
+    p.vv -= m_.particleGravity * dt;
     p.u += p.vu * dt;
     p.v += p.vv * dt;
 
@@ -424,10 +406,10 @@ void SideView::updateParticles(float dt) {
       p.v = nv * limit;
       float vn = p.vu * nu + p.vv * nv;
       if (vn > 0) {
-        float slide = expf(-WALL_FRICTION * dt);
+        float slide = expf(-m_.wallFriction * dt);
         float tvu = p.vu - vn * nu, tvv = p.vv - vn * nv;
-        p.vu = tvu * slide - vn * WALL_BOUNCE * nu;
-        p.vv = tvv * slide - vn * WALL_BOUNCE * nv;
+        p.vu = tvu * slide - vn * m_.wallBounce * nu;
+        p.vv = tvv * slide - vn * m_.wallBounce * nv;
       }
     }
 
@@ -436,9 +418,9 @@ void SideView::updateParticles(float dt) {
     float surface = surfaceAt(p.u);
     if (p.vv < 0 && p.v < surface) {
       int cell = (int)((p.u + RADIUS) / DX + 0.5f);
-      if (cell >= 0 && cell < N) foam_[cell] = fmaxf(foam_[cell], LANDING_FOAM);
+      if (cell >= 0 && cell < N) foam_[cell] = fmaxf(foam_[cell], m_.landingFoam);
       p.kind = 3;
-      p.life = FLECK_LIFE;
+      p.life = m_.fleckLife;
       p.v = surface;
       p.vu = p.vv = 0;
     } else if (p.v < surface - 2) {
@@ -459,21 +441,21 @@ void SideView::prepareParticles() {
     d.y = (int16_t)(HEIGHT / 2 - p.u * downX_ - p.v * downY_);
     if (p.kind == 1) {
       // Fat blob at the base of the tongue, thinning to a sheet as it climbs.
-      float young = 1 - (CURL_LIFE - p.life) / CURL_BLOB_TIME;
-      d.r = (uint8_t)(CURL_SHEET_R + (young > 0 ? (int)(young * (CURL_BLOB_R - CURL_SHEET_R) + 0.5f) : 0));
+      float young = 1 - (m_.curlLife - p.life) / m_.curlBlobTime;
+      d.r = (uint8_t)(m_.curlSheetR + (young > 0 ? (int)(young * (m_.curlBlobR - m_.curlSheetR) + 0.5f) : 0));
       // Glassy water on the way up, paling with age; once it's falling it
       // has broken up into spray, so it turns white (otherwise a young piece
       // falling back is water-coloured and seems to land behind the surface).
-      float age = (CURL_LIFE - p.life) / CURL_SHADE_TIME;
+      float age = (m_.curlLife - p.life) / m_.curlShadeTime;
       int shade = age >= 1 ? CURL_SHADES - 1 : (int)(age * (CURL_SHADES - 1));
       if (p.vv < 0 && shade < CURL_FALLING_SHADE) shade = CURL_FALLING_SHADE;
       d.color = curlShade[shade];
     } else if (p.kind == 3) {
-      d.r = p.life > FLECK_LIFE / 2 ? 2 : 1;  // shrinks as it fades
-      d.color = DROPLET_COLOR;
+      d.r = p.life > m_.fleckLife / 2 ? 2 : 1;  // shrinks as it fades
+      d.color = dropletColor;
     } else {
       d.r = 1 + (k & 1);
-      d.color = DROPLET_COLOR;
+      d.color = dropletColor;
     }
   }
 }
@@ -526,11 +508,11 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
   // the water's horizontal axis (h = (downY, -downX), "right" when upright), in g.
   float side = lastGx_ * downY_ - lastGy_ * downX_;
 
-  // Boost quick small changes (see SENSITIVITY).
+  // Boost quick small changes (see FAST_SMOOTHING and Material::sensitivity).
   slowSide_ += (side - slowSide_) * (1.0f - expf(-dt / FAST_SMOOTHING));
   float change = side - slowSide_;
   float mag = fabsf(change) - DEAD_ZONE;
-  float boost = mag > 0 ? fminf(SENSITIVITY * sqrtf(mag), MAX_BOOST) : 0;
+  float boost = mag > 0 ? fminf(m_.sensitivity * sqrtf(mag), MAX_BOOST) : 0;
   if (change < 0) boost = -boost;
   if (fabsf(boost) > ACTIVE_BOOST) quietTime_ = 0;  // the necklace is really moving
 
@@ -538,7 +520,7 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
   swellTimer_ -= dt;
   if (swellTimer_ <= 0) {
     swellTimer_ = SWELL_PERIOD * (0.6f + 0.8f * random01());
-    swellTarget_ = (random01() * 2 - 1) * SWELL_AMPLITUDE;
+    swellTarget_ = (random01() * 2 - 1) * m_.swellAmplitude;
   }
   swell_ += (swellTarget_ - swell_) * (1.0f - expf(-dt / SWELL_PERIOD));
 
@@ -552,17 +534,17 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
   } else if (dropTimer_ <= 0) {
     dropTimer_ = DROP_INTERVAL * (0.3f + 1.4f * random01());
     int j = 1 + (int)(random01() * (N - 1));
-    q_[j] += (random01() < 0.5f ? -1 : 1) * DROP_STRENGTH * (0.5f + random01());
+    q_[j] += (random01() < 0.5f ? -1 : 1) * m_.dropStrength * (0.5f + random01());
   }
 
-  float aSide = softClip(side + boost + swell_) * G;
+  float aSide = softClip(side + boost + swell_) * g_;
 
   // Churning water loses energy faster: extra damping above CALM_RMS.
   float sumSq = 0;
   for (int i = 0; i < N; i++) sumSq += h_[i] * h_[i];
   float rms = sqrtf(sumSq / N);
   float churn = fminf(fmaxf((rms - CALM_RMS) / (CHURN_RMS - CALM_RMS), 0.0f), 1.0f);
-  damping_ = DAMPING + TURBULENT_DAMPING * churn;
+  damping_ = m_.damping + TURBULENT_DAMPING * churn;
 
   // Refill the particle budget.
   particleBudget_ = fminf(particleBudget_ + PARTICLES_PER_SECOND * dt, PARTICLE_BURST);
@@ -597,35 +579,35 @@ void SideView::step(float dt, float aSide) {
   float keep = 1.0f - damping_ * dt;
   for (int j = 1; j < N; j++) {
     float slope = (h_[j] - h_[j - 1]) / DX;
-    q_[j] = (q_[j] + dt * (-G * slope + aSide)) * keep;
+    q_[j] = (q_[j] + dt * (-g_ * slope + aSide)) * keep;
   }
   q_[0] = q_[N] = 0;  // walls
 
   // Water moves between cells.
   for (int i = 0; i < N; i++) {
-    h_[i] -= dt * DEPTH * (q_[i + 1] - q_[i]) / DX;
+    h_[i] -= dt * m_.depth * (q_[i + 1] - q_[i]) / DX;
   }
 
-  // Numerical diffusion (see SMOOTHING). The walls mirror, so no water is
+  // Numerical diffusion (Material::smoothing). The walls mirror, so no water is
   // lost or gained.
   float prev = h_[0];
   for (int i = 0; i < N; i++) {
     float left = prev;
     float right = h_[i < N - 1 ? i + 1 : i];
     prev = h_[i];
-    float hi = h_[i] + SMOOTHING * (left + right - 2 * h_[i]);
+    float hi = h_[i] + m_.smoothing * (left + right - 2 * h_[i]);
     h_[i] = hi > MAX_HEIGHT ? MAX_HEIGHT : (hi < -MAX_HEIGHT ? -MAX_HEIGHT : hi);
   }
 }
 
 void SideView::updateFoam(float dt) {
-  float decay = expf(-dt / 0.6f);  // foam fades over about half a second
+  float decay = expf(-dt / m_.foamFadeTime);
   for (int i = 0; i < N; i++) {
     // Fast flow and sharp crests whip up foam.
     float flow = fabsf(q_[i] + q_[i + 1]) * 0.5f;
     float left = h_[i > 0 ? i - 1 : i], right = h_[i < N - 1 ? i + 1 : i];
     float crest = h_[i] - 0.5f * (left + right);  // positive at a peak
-    float target = flow * 0.012f + (crest > 0 ? crest * 0.25f : 0);
+    float target = flow * m_.foamFlowGain + (crest > 0 ? crest * m_.foamCrestGain : 0);
     if (target > 1) target = 1;
     foam_[i] = fmaxf(foam_[i] * decay, target);
   }
@@ -651,7 +633,7 @@ void SideView::prepareRender() {
       foam = foam_[i] + (foam_[i + 1] - foam_[i]) * f;
     }
     surfaceQ_[k] = (int32_t)((restLevel_ + h) * 65536.0f);
-    foamPx_[k] = (uint8_t)(1 + foam * FOAM_MAX_PX + 0.5f);  // always at least a thin line
+    foamPx_[k] = (uint8_t)(1 + foam * m_.foamMaxPx + 0.5f);  // always at least a thin line
 
     // Distance to the wall at the surface's height (the wall is a circle,
     // so at height v it sits at |u| = sqrt(R^2 - v^2)), for the froth fade.

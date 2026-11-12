@@ -84,3 +84,4 @@ struct Material {
 
 extern const Material WATER;
 extern const Material LAVA;
+extern const Material MERCURY;

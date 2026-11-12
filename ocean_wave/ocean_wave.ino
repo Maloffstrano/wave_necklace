@@ -14,8 +14,8 @@
 // Flat face up: the top-down pool (PoolView.cpp); touch it to make ripples.
 // Touch and hold (anywhere): the backlight drops to dimmest and ramps up
 // toward full; release to keep that brightness. A quick tap is left free
-// (in the pool it makes a ripple). Swipe sideways: water <-> lava.
-// The brightness and water/lava choice are remembered across power-off.
+// (in the pool it makes a ripple). Swipe right/left: water -> mercury ->
+// lava and back. The brightness and material are remembered across power-off.
 
 #include <NecklaceBoard.h>
 #include "FreeSans12pt7b.h"
@@ -63,22 +63,37 @@ PoolView pool;
 // lifts after adjusting, the material when a swipe happens.
 Preferences settings;
 
-// ---- Material: water or lava ----
-// A swipe switches; the change blends every setting (physics and colours)
-// over MATERIAL_BLEND_S, so the fluid thickens into lava or thins back into
-// water with its waves carrying on.
+// ---- Material: water, mercury or lava ----
+// A swipe steps to the next or previous material; the change blends every
+// setting (physics and colours) over MATERIAL_BLEND_S, so the fluid thickens
+// or thins with its waves carrying on. Swiping again mid-blend starts a new
+// blend from whatever is showing.
+const Material *const MATERIALS[] = {&WATER, &MERCURY, &LAVA};
+const int MATERIAL_COUNT = sizeof(MATERIALS) / sizeof(MATERIALS[0]);
 const float MATERIAL_BLEND_S = 1.5f;
-float lavaAmount = 0;   // 0 = water .. 1 = lava (what's showing now)
-float lavaTarget = 0;   // where it's heading
+int materialIndex = 0;        // the chosen material
+Material blendFrom = WATER;   // what the current blend started from
+Material showing = WATER;     // what's on screen now
+float blendProgress = 1;      // 0..1; 1 = arrived
 
-void updateMaterial(float dt) {
-  if (lavaAmount == lavaTarget) return;
-  float step = dt / MATERIAL_BLEND_S;
-  lavaAmount = lavaTarget > lavaAmount ? fminf(lavaAmount + step, lavaTarget) : fmaxf(lavaAmount - step, lavaTarget);
-  float t = lavaAmount * lavaAmount * (3 - 2 * lavaAmount);  // smoothstep: eases in and out
-  Material m = Material::mix(WATER, LAVA, t);
+void applyMaterial(const Material &m) {
+  showing = m;
   water.setMaterial(m);
   pool.setMaterial(m);
+}
+
+void chooseMaterial(int index, bool instant) {
+  materialIndex = (index + MATERIAL_COUNT) % MATERIAL_COUNT;
+  blendFrom = showing;
+  blendProgress = instant ? 1 : 0;
+  if (instant) applyMaterial(*MATERIALS[materialIndex]);
+}
+
+void updateMaterial(float dt) {
+  if (blendProgress >= 1) return;
+  blendProgress = fminf(blendProgress + dt / MATERIAL_BLEND_S, 1.0f);
+  float t = blendProgress * blendProgress * (3 - 2 * blendProgress);  // smoothstep: eases in and out
+  applyMaterial(Material::mix(blendFrom, *MATERIALS[materialIndex], t));
 }
 
 // ---- Orientation ----
@@ -359,8 +374,8 @@ void readFinger() {
   if (abs(dx) > STILL_PX || abs(dy) > STILL_PX) fingerMoved = true;
   if (!fingerSwiped && held < SWIPE_MS && abs(dx) > SWIPE_PX && abs(dx) > 2 * abs(dy)) {
     fingerSwiped = true;
-    lavaTarget = lavaTarget > 0.5f ? 0.0f : 1.0f;  // either direction toggles
-    settings.putBool("lava", lavaTarget > 0.5f);
+    chooseMaterial(materialIndex + (dx > 0 ? 1 : -1), false);  // right: next, left: previous
+    settings.putUChar("material", materialIndex);
   }
   if (fingerMoved || held < DIM_HOLD_MS) return;
   fingerDimming = true;
@@ -409,11 +424,10 @@ void setup() {
   settings.begin("necklace", false);
   brightness = settings.getUShort("brightness", BACKLIGHT_MAX);
   if (brightness < BRIGHTNESS_MIN || brightness > BACKLIGHT_MAX) brightness = BACKLIGHT_MAX;
-  if (settings.getBool("lava", false)) {
-    lavaAmount = lavaTarget = 1;  // straight to lava, no blend at boot
-    water.setMaterial(LAVA);
-    pool.setMaterial(LAVA);
-  }
+  // (Before mercury existed only a "lava" flag was saved: index 2 = lava.)
+  int saved = settings.getUChar("material", settings.getBool("lava", false) ? 2 : 0);
+  if (saved >= MATERIAL_COUNT) saved = 0;
+  chooseMaterial(saved, true);  // straight there, no blend at boot
 
   NecklaceBoard::setBacklight(brightness);
   bootButton.begin();

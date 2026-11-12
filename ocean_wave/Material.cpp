@@ -66,3 +66,33 @@ const Material LAVA = {
     // pool
     .rippleSpeed = 70, .rippleDamping = 2.5f, .lightGain = 14, .touchDrop = 8, .ringGain = 2.5f, .poolBloop = 1.5f,
 };
+
+// Mercury: a heavy liquid metal, between water and lava. Waves a little
+// faster than water's (so, by the rules of thumb, splash gain a bit lower and
+// curl gain a bit lower), settling quickly; surface tension smooths small
+// ripples. It doesn't wet the glass: pieces slide easily and bounce off the
+// wall, and the curl is a few round beads that stay round. No foam: the
+// surface line is a thin bright highlight. Gunmetal deep down to bright
+// silver near the surface; in the pool, ripples are lit strongly like a mirror.
+const Material MERCURY = {
+    // wave model
+    .waveSpeed = 200, .depth = 100, .damping = 1.6f, .smoothing = 0.1f,
+    .sensitivity = 0.3f, .swellAmplitude = 0.008f, .dropStrength = 25,
+    .dropInterval = 2.5f, .bloopSpeed = 0,
+    // splashes
+    .splashGain = 70, .maxSplash = 85, .splashDroplets = 10,
+    // curl and spray (beads)
+    .particleGravity = 1300, .curlSpeedGain = 2.3f, .curlMinSpeed = 240, .curlMaxSpeed = 470,
+    .curlEmitRate = 0.015f, .curlThickness = 8, .curlInnerSlowdown = 0.1f,
+    .curlLife = 2.0f, .curlBlobTime = 0.3f, .curlBlobR = 4, .curlSheetR = 3, .curlShadeTime = 0.6f,
+    .sprayMinRise = 260, .sprayChance = 0.0002f, .wallFriction = 0.5f, .wallBounce = 0.5f,
+    // foam: just a thin highlight
+    .foamMaxPx = 1, .foamFlowGain = 0.005f, .foamCrestGain = 0.1f, .foamFadeTime = 0.4f,
+    .landingFoam = 0.2f, .fleckLife = 0.4f,
+    // colours
+    .deep = {38, 40, 46}, .surface = {190, 195, 205}, .curve = {1.5f, 1.5f, 1.3f}, .depthRange = 160,
+    .froth = {240, 243, 248}, .sheet = {210, 214, 222}, .spray = {235, 238, 245},
+    .droplet = {245, 247, 250}, .poolShadow = {8, 8, 12}, .poolGlint = {255, 255, 255},
+    // pool
+    .rippleSpeed = 200, .rippleDamping = 1.6f, .lightGain = 16, .touchDrop = 5, .ringGain = 2, .poolBloop = 0,
+};

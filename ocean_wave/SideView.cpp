@@ -30,6 +30,32 @@
 // is fast or a crest is sharp, then fades. Only the visible circle is
 // rendered; the corners of the 360x360 square are filled with black.
 
+// ---- How the tuning constants affect each other ----
+// (The full version, with a table, is in things-I-learned.md.)
+// WAVE_SPEED is the hub: G = WAVE_SPEED^2 / DEPTH.
+//   - Tilting: the sideways push is scaled by G, so how far the surface tilts
+//     does NOT depend on WAVE_SPEED. SENSITIVITY and SWELL_AMPLITUDE (in g)
+//     behave the same at any speed.
+//   - Splashes and drops add flow (px/s). Wave height ~ flow * DEPTH / speed,
+//     so halving WAVE_SPEED doubles splash heights: SPLASH_GAIN, MAX_SPLASH
+//     and DROP_STRENGTH must come down with it.
+//   - How fast water climbs the wall (the rise rate) scales with WAVE_SPEED,
+//     and everything driven by it follows:
+//       curl launch speed = rise * CURL_SPEED_GAIN; flight height ~ speed^2,
+//       so halving the waves quarters curl height unless the gain doubles
+//       curl density = rise * CURL_EMIT_RATE (also halves)
+//       crest spray (SPRAY_MIN_RISE) and whipped-up foam (flow * 0.012) fade
+//   - STILL_FLOW (when drops may start) is a flow speed: slower waves count as
+//     "still" sooner.
+//   - SUBSTEP must keep WAVE_SPEED * SUBSTEP / DX well below 1 (now 0.17).
+// Independent of WAVE_SPEED:
+//   - DAMPING (settling time in seconds; slower waves cross the bowl fewer
+//     times before they settle, so they feel heavier)
+//   - PARTICLE_GRAVITY (curl height for a given launch speed, fall speed,
+//     and the loop-the-loop limit CURL_MAX_SPEED ~ sqrt(gravity * radius))
+//   - the lean level (REST_LEVEL..FULL_LEVEL), colours, foam fade.
+// PoolView copies FULL_LEVEL and the depth colour ramp: change them together.
+
 // Pixel loops: Arduino builds with -Os (small code), which is slow for tight
 // inner loops. Optimise this file for speed instead.
 #pragma GCC optimize("O3")
@@ -101,7 +127,7 @@ const float TURBULENT_DAMPING = 2.5f; // 1/s extra (churning water loses energy 
 // middle (where the wall curves back inward) is launched along the wall's
 // tangent: it shoots up, already heading inward, and gravity bends it over
 // into an arc that lands back on the water. A stream of those is the curl.
-const float PARTICLE_GRAVITY = 1000.0f;  // px/s^2 (about the wave model's G)
+const float PARTICLE_GRAVITY = 1000.0f;  // px/s^2 (independent of the wave model's G; sets curl height and fall speed)
 const float CURL_MIN_HEIGHT = -25.0f;    // px: contact point must be above this (v)
 const float CURL_SPEED_GAIN = 2.8f;      // launch speed = rise rate * this (doubled when the waves were halved)
 // A slow climb just runs smoothly up the wall (the surface shows that); only

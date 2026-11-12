@@ -505,3 +505,28 @@ Software for a desk toy: rest mode currently only starts when it's lying flat (i
 - Measure current draw while awake (full brightness and dimmest) and while resting. Rest currently turns off the backlight but leaves the chip running, so a resting toy still drains the battery.
 - If resting draw is high, add deeper sleep, woken by the motion sensor's interrupt on a bump, so it can sit for days between plays.
 - Tune the splash threshold and rest settings with real footsteps while worn.
+
+### Case design: drawings and a STEP model
+
+Waveshare publishes the mechanical files on the board's [Resources and Documents](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.85/Resources-And-Documents) page, which is linked from the [product docs](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.85).
+
+- **3D model (STEP), DWG and PDF drawing:** [ESP32-S3-Touch-LCD-1.85.rar](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.85/ESP32-S3-Touch-LCD-1.85.rar), about 3.8 MB. It contains `ESP32-S3-Touch-LCD-1_85-20260703.stp` (19 MB), a `.dwg` and a `.pdf`.
+  - The page labels this link "1.85C Structure Drawing", but the files inside are named for the 1.85.
+  - The PDF shows this round board with three M2 holes.
+  - Open the RAR with The Unarchiver or Keka on a Mac.
+- **2D drawing only, an older version:** [ESP32-S3-Touch-LCD-1.85_2D_structure.zip](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.85/ESP32-S3-Touch-LCD-1.85_2D_structure.zip) (DWG + PDF).
+- **Schematics:** [original](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.85/ESP32-S3-Touch-LCD-1.85.pdf) and [V2.1](https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-1.85/ESP32-S3-Touch-LCD-1.85_V2.1.pdf).
+
+Key numbers from the PDF drawing in the RAR:
+
+| What | Size |
+|---|---|
+| Cover glass (outer diameter) | 55.00 ± 0.1 mm |
+| Visible display area | 46.08 mm diameter |
+| Total thickness, glass to the tallest part on the back | 9.70 mm |
+| Glass thickness | 0.70 mm |
+| Mounting holes | 3 × M2, on the back of the board |
+
+**Check first:** the two drawings show different board layouts (the USB-C port, SD slot and holes sit in different places). Waveshare has revised this board more than once, and we already know of two panel revisions. Compare the drawing with your own board before modelling the holes and cut-outs.
+
+**Battery:** a 602535 cell is about 6.0 × 25 × 35 mm. Allow a few extra millimetres at one end for the protection board and wires, and measure the actual cell.

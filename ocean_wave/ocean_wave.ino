@@ -7,7 +7,9 @@
 // - Diagnostics: raw accel/gyro, gravity direction and frame timing.
 //   A blue dot on the rim marks "down" (where the water will pool),
 //   a white dot marks "up" (where the sky will be).
-// Short PWR press: calm the water. Hold PWR for 2 s to power off (on battery).
+// Short PWR press: calm the water (on the diagnostics screen: switch the
+// side view's water model, classic tank <-> round bowl). Hold PWR for 2 s to
+// power off (on battery).
 // Face down: the screen goes dark until the necklace is picked up again.
 // Flat and left alone for 30 s: rest (backlight fades out, drawing stops);
 // a touch, a bump or picking it up wakes it.
@@ -233,6 +235,8 @@ void drawHud(const Motion &m, bool motionOk) {
     hud->setCursor(left, y); hud->print(buf); y += line;
     snprintf(buf, sizeof(buf), "jolt %.2f g  %s", peakJoltShown, poolMode ? "pool" : "side");
     hud->setCursor(left, y); hud->print(buf); y += line;
+    snprintf(buf, sizeof(buf), "model: %s (PWR)", water.bowlModel() ? "bowl" : "classic");
+    hud->setCursor(left, y); hud->print(buf); y += line;
   }
 
   y += 8;
@@ -278,12 +282,13 @@ void diagnosticsFrame(const Motion &m, bool motionOk, uint32_t t0) {
 const int16_t LABEL_W = 230, LABEL_H = 26;  // fits inside the circle at this height
 const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - 70;
 bool showFpsLabel = false;  // FPS/render overlay on the wave screen (the diagnostics screen always shows timing)
+bool showModelLabel = false; // "bowl" / "classic" on the wave screen (set true while comparing models)
 
 void renderWaveStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *) {
   uint32_t start = micros();
   if (poolMode) PoolView::renderStrip(pixels, y0, rows, &pool);
   else SideView::renderStrip(pixels, y0, rows, &water);
-  if (showFpsLabel && y0 < LABEL_Y + LABEL_H && y0 + rows > LABEL_Y) {
+  if ((showFpsLabel || showModelLabel) && y0 < LABEL_Y + LABEL_H && y0 + rows > LABEL_Y) {
     const uint16_t *labelPx = label->getFramebuffer();
     for (int16_t r = 0; r < rows; r++) {
       int16_t y = y0 + r;
@@ -306,9 +311,15 @@ void updateFpsLabel() {
   label->fillScreen(RGB565_BLACK);
   label->setFont(&FreeSans12pt7b);
   label->setTextColor(RGB565_YELLOW);
-  // render = CPU time spent drawing this frame's pixels (not waiting on DMA)
-  snprintf(buf, sizeof(buf), "%.0f fps  render %.1fms", fpsSmoothed, renderCpuUs / 1000.0f);
-  label->setCursor(4, LABEL_H - 7);
+  int16_t x = 4;
+  if (showFpsLabel) {
+    // render = CPU time spent drawing this frame's pixels (not waiting on DMA)
+    snprintf(buf, sizeof(buf), "%.0f fps  render %.1fms", fpsSmoothed, renderCpuUs / 1000.0f);
+  } else {
+    snprintf(buf, sizeof(buf), "%s", water.bowlModel() ? "bowl" : "classic");
+    x = LABEL_W / 2 - 30;  // roughly centred
+  }
+  label->setCursor(x, LABEL_H - 7);
   label->print(buf);
 }
 
@@ -325,7 +336,7 @@ void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
   } else if (motionOk) {
     water.update(screenGravityX(m), screenGravityY(m), dt, jolt);
   }
-  if (showFpsLabel) updateFpsLabel();
+  if (showFpsLabel || showModelLabel) updateFpsLabel();
 
   uint32_t t1 = micros();
   renderCpuUs = 0;
@@ -395,7 +406,13 @@ void handleButtons() {
   if (bootButton.pressed()) {
     screen = (screen == Screen::Wave) ? Screen::Diagnostics : Screen::Wave;
   }
-  if (pwrButton.pressed()) water.reset();  // short PWR press: calm the water
+  if (pwrButton.pressed()) {
+    if (screen == Screen::Diagnostics) {  // compare models
+      water.setBowlModel(!water.bowlModel());
+      settings.putBool("bowl", water.bowlModel());
+    }
+    else water.reset();  // calm the water
+  }
   if (pwrButton.heldFor(POWER_OFF_HOLD_MS)) {
     clearScreen(RGB565_BLACK);
     powerOff();  // on USB power the board keeps running; the screen just goes dark
@@ -428,6 +445,7 @@ void setup() {
   int saved = settings.getUChar("material", settings.getBool("lava", false) ? 2 : 0);
   if (saved >= MATERIAL_COUNT) saved = 0;
   chooseMaterial(saved, true);  // straight there, no blend at boot
+  water.setBowlModel(settings.getBool("bowl", true));  // bowl is the default; classic stays switchable
 
   NecklaceBoard::setBacklight(brightness);
   bootButton.begin();

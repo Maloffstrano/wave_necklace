@@ -623,3 +623,42 @@ Getting photos onto it:
 - `esptool erase-flash`, or restoring the full factory firmware backup (`backup/factory_firmware_16MB.bin` overwrites all 16 MB)
 
 Photos on an SD card are safe from all of these.
+
+## The bowl model: the circle becomes the container
+
+### The insight (the user's, after a steak and shrimp dinner)
+
+"The calculation looks to go off the edge of the screen. So the edge of the screen means nothing. It's still a porthole." The original model was a rectangular tank, 360 px wide with a flat floor and vertical walls at the far left and right; the circle was only drawn over it. Water climbing those invisible walls was cut off by the screen edge, and the curl was layered on separately, so it never quite matched the water it seemed to come from.
+
+### The fix, within the same family of models
+
+No need for a full 2D fluid (particles or grids that track clumps of water). The shallow-water method handles an uneven floor; it's how waves on beaches are modelled.
+
+- **The round floor:** each cell is a column of water standing on the circle (floor = -√(R² - u²)). The view rotates with gravity, so the floor never changes shape.
+- **Wet and dry cells:** near the walls the floor curves up and the water gets shallow, or runs out. When the water tilts, the columns past the waterline are dry floor. In the classic model those columns still held water, drawn outside the circle.
+- **The full equations:** the non-linear shallow-water equations, solved with a Rusanov flux and "hydrostatic reconstruction" (Audusse et al., 2004). That keeps still water exactly still over the curved floor and depth never negative where the waterline moves.
+- **Shoaling for free:** waves travel at √(g·depth), fast in the deep middle and slow in the shallows, so they bunch up and steepen as they run up the wall. That's what makes real waves break.
+
+Checked in a Mac simulation before uploading: still water stayed perfectly still (zero drift), a strong push sent the water up one side with dry cells on the other, three seconds of violent shaking stayed stable, and volume was conserved exactly.
+
+### The curl, rebuilt on real water
+
+Above the equator the wall curves back over the water, which a column model can't hold. That's where the curl starts:
+
+- Water that climbs past the equator is taken out of the body and launched as curl pieces, each carrying 4 px² of water. Landing pieces give it back. The bowl keeps its exact volume, counting water in flight.
+- **Launch speed was the hard part.** The first try used how fast the water flows sideways at the wall: nearly zero on the steep part, so pieces barely left (the user saw "one particle"). The simulation showed why: near a steep wall, a small sideways shift lifts the edge a long way. The edge reaches the equator climbing about 70 px/s in a firm swing, 140 in a hard jolt, 350 in violent shaking. That climbing speed, times the material's curl gain (×1.5 for the bowl), is the launch speed.
+- **Too little curl at first:** the scheme smooths the water a little every step, on top of the material's damping. Halving the damping for the bowl doubled the water reaching the equator, and smaller pieces (4 px² instead of 10) made denser tongues: about 150 pieces for a firm swing, against about 30 before.
+
+### Foam that floats
+
+- **Foam moves with the water** (it was attached to fixed spots). A swell carries foam up the wall and leaves it there as it drains. It gathers at the water's edge, which produced an unplanned **meniscus** that slowly drains back.
+- **A forming curl consumes the foam.** Old foam and landed flecks at the wall drew a white line across the base of each new tongue, so it looked "severed". Now a curl clears the foam and flecks within 40 px of its wall as it forms.
+
+### Lessons
+
+- **Make the mode visible.** Twice the user filmed the classic model thinking it was the bowl, because nothing on screen said which was running and every upload reset it to classic. The model is now saved like the other settings, and the water screen can show "bowl" or "classic" while comparing.
+- **Simulate before uploading.** Quick simulations on the Mac caught a launch speed that would have been near zero, and quantified the damping trade-off, before any flashing.
+
+### The verdict
+
+"There is a definite difference between bowl and classic. The water seems to move better. It might not curl as much, or as high, even during violent motions, but it seems to feel better. With classic I could throw water from one end of the circle to the other." Part of classic's drama was the porthole: water built height on invisible walls outside the circle. Lava stays thick with barely any curl; mercury throws fewer, smaller marbles, since only water that really overshoots the wall leaves. Bowl is now the default; classic stays switchable on the diagnostics screen (short PWR).

@@ -81,6 +81,46 @@ const float FULL_LEVEL = 195.0f;      // px: above the rim (180), so the bowl is
 const float GRAVITY_SMOOTHING = 0.35f;  // s: how long the water takes to follow a new "down"
 const float SUBSTEP = 1.0f / 240.0f;  // s: keeps waveSpeed * dt / dx well below 1 (stable)
 const float MAX_HEIGHT = 150.0f;      // clamp so extreme shakes can't blow up
+
+// ---- The bowl model (setBowlModel) ----
+// The circle is the container. Each cell is a column of water standing on
+// the round floor (bed = -sqrt(R^2 - u^2)); near the walls the floor curves
+// up, the water gets shallow, and can run out (dry). These are the full
+// (non-linear) shallow-water equations with an uneven floor, the standard
+// model for waves running up a beach:
+//   depth:    d_t + (d w)_u = 0
+//   momentum: (d w)_t + (d w^2 + g d^2 / 2)_u = -g d bed_u + d a_side
+// solved with finite volumes: a Rusanov flux between cells, and "hydrostatic
+// reconstruction" (Audusse et al. 2004) at each face, which keeps water at
+// rest exactly at rest over the curved floor, and keeps depth >= 0 where the
+// shoreline moves. Waves travel at sqrt(g d): fast in the deep middle, slower
+// in the shallows near the walls, so they bunch up and steepen as they run
+// up the side (shoaling, which is what makes real waves break).
+const float CENTRE_DEPTH = REST_LEVEL + 180.0f;  // px of water at the centre at rest (166)
+const float WET = 0.5f;               // px: shallower than this counts as dry
+const float BOWL_CFL = 0.45f;         // fraction of a cell a wave may cross per substep (< 0.5)
+const int MAX_BOWL_SUBSTEPS = 48;
+const float MAX_FLOW_SPEED = 700.0f;  // px/s: cap for thin films near the shoreline
+// The bowl's numerical method already smooths the water a little every step
+// (that's what keeps the moving shoreline stable), so it needs less damping
+// than classic for the same liveliness. Halving it roughly doubles how much
+// water a slosh sends past the equator (measured in a simulation).
+const float BOWL_DAMPING_SCALE = 0.5f;
+// The curl in the bowl model: above the equator the wall curves back over the
+// water, which a column model can't hold. Water that climbs past it leaves the
+// body as curl pieces, each carrying some of that water. They leave at the
+// speed the water's edge was climbing the wall when it got there (times
+// Material::curlSpeedGain): near the steep wall a small sideways shift lifts
+// the edge a long way, so the edge climbs fast even though the water itself
+// barely moves sideways. The round wall steers the pieces inward, gravity
+// brings them down, and their water rejoins the body where they land.
+// Measured in a simulation: the edge reaches the equator climbing ~70 px/s
+// in a firm swing, ~140 in a hard jolt, ~350 in violent shaking.
+const float CURL_PIECE_WATER = 4.0f;  // px^2 of water per curl piece (the jet is a thin sheet)
+const float BOWL_MIN_LAUNCH = 100.0f; // px/s: slow overflow still plops off the wall
+const float BOWL_LAUNCH_BOOST = 1.5f; // extra on top of Material::curlSpeedGain (the bowl's edge climbs slower than classic's wall rise)
+const float CLIMB_SMOOTHING = 0.03f;  // s
+const int OVERHANG_CELLS = 4;         // outermost cells checked for water above the wall
 // Numerical diffusion (Material::smoothing): each substep nudges every cell
 // toward the average of its neighbours. It strongly damps the shortest wave
 // the grid can hold (neighbouring cells alternating up/down), which otherwise
@@ -141,6 +181,10 @@ const float TURBULENT_DAMPING = 2.5f; // 1/s extra (churning water loses energy 
 //   - Landing pieces become flecks riding the surface, then fade.
 const float CURL_MIN_HEIGHT = -25.0f;    // px: contact point must be above this (v)
 const int MAX_SPRAY_PER_FRAME = 1;       // across the whole surface
+// A forming curl sweeps up the foam near its wall (the rising water carries
+// it into the curl). Otherwise old foam and landed flecks draw a white line
+// across the base of the new tongue, and it looks cut off from the water.
+const float CURL_CONSUMES_PX = 40.0f;    // px from the wall
 
 // ---- Colours (panel byte order), built from the material ----
 // The panel is RGB565: only 32 levels of red and blue. A smooth depth gradient
@@ -228,6 +272,11 @@ float softClip(float x) {
 }  // namespace
 
 void SideView::begin() {
+  for (int i = 0; i < N; i++) {
+    float u = -RADIUS + i * DX;
+    float w2 = RADIUS * RADIUS - u * u;
+    bed_[i] = -(w2 > 0 ? sqrtf(w2) : 0);
+  }
   setMaterial(WATER);
   rngState ^= esp_random();
 }
@@ -235,6 +284,7 @@ void SideView::begin() {
 void SideView::setMaterial(const Material &m) {
   m_ = m;
   g_ = m.waveSpeed * m.waveSpeed / m.depth;  // so that waves travel at c = sqrt(G * depth)
+  gBowl_ = m.waveSpeed * m.waveSpeed / CENTRE_DEPTH;  // same speed at the bowl's centre at rest
   buildColors(m);
 }
 
@@ -257,15 +307,46 @@ void SideView::setLean(float leanDeg) {
   restLevel_ = REST_LEVEL + (FULL_LEVEL - REST_LEVEL) * t;
 }
 
+void SideView::setBowlModel(bool on) {
+  bowl_ = on;
+  reset();
+}
+
+void SideView::kickFlow(int face, float dv) {
+  if (face < 1 || face > N - 1) return;
+  if (!bowl_) {
+    q_[face] += dv;
+    return;
+  }
+  // The face sits between cells face-1 and face: speed both up.
+  for (int c = face - 1; c <= face; c++) {
+    if (dep_[c] > WET) mom_[c] += dep_[c] * dv * 0.5f;
+  }
+}
+
 void SideView::reset() {
   for (int i = 0; i < N; i++) h_[i] = foam_[i] = 0;
   for (int j = 0; j <= N; j++) q_[j] = 0;
+  if (bowl_) {
+    for (int i = 0; i < N; i++) {
+      dep_[i] = fmaxf(restLevel_ - bed_[i], 0.0f);
+      mom_[i] = 0;
+    }
+    curlWater_[0] = curlWater_[1] = 0;
+    climb_[0] = climb_[1] = 0;
+    edgeV_[0] = edgeV_[1] = restLevel_;
+    syncBowl();
+    for (int i = 0; i < N; i++) hPrev_[i] = h_[i];
+  }
   slowSide_ = swell_ = swellTarget_ = 0;
   quietTime_ = stillTime_ = 0;
   damping_ = m_.damping;
   particleBudget_ = PARTICLE_BURST;
   for (auto &p : particles_) p.kind = 0;
-  for (int i = 0; i < N; i++) hPrev_[i] = rate_[i] = 0;
+  for (int i = 0; i < N; i++) {
+    hPrev_[i] = h_[i];
+    rate_[i] = 0;
+  }
   dotCount_ = 0;
 }
 
@@ -279,7 +360,7 @@ void SideView::splash(float jolt) {
     int mode = 1 + (int)(random01() * 5);  // 1..5 half-waves across the bowl
     float amp = strength * (0.4f + 0.6f * random01()) * (random01() < 0.5f ? -1 : 1);
     for (int j = 1; j < N; j++) {
-      q_[j] += amp * sinf(PI * mode * j / N);
+      kickFlow(j, amp * sinf(PI * mode * j / N));
     }
   }
   float foam = fminf(strength / m_.maxSplash, 1.0f);
@@ -305,7 +386,15 @@ float SideView::surfaceAt(float u) const {
   return restLevel_ + h_[i] + (h_[i + 1] - h_[i]) * f;
 }
 
-void SideView::emit(float u, float v, float vu, float vv, uint8_t kind, float life) {
+void SideView::returnWater(float u, float vol) {
+  if (!bowl_ || vol <= 0) return;
+  int c = (int)((u + RADIUS) / DX + 0.5f);
+  if (c < 0) c = 0;
+  if (c > N - 1) c = N - 1;
+  dep_[c] += vol / DX;
+}
+
+void SideView::emit(float u, float v, float vu, float vv, uint8_t kind, float life, float vol) {
   if (particleBudget_ < 1) return;  // over budget this moment: skip
   particleBudget_ -= 1;
   // Take the next free slot. Only if the whole pool is in flight, reuse the
@@ -319,12 +408,17 @@ void SideView::emit(float u, float v, float vu, float vv, uint8_t kind, float li
     }
   }
   nextParticle_ = (slot + 1) % MAX_PARTICLES;
-  particles_[slot] = {u, v, vu, vv, life, kind};
+  if (particles_[slot].kind) returnWater(particles_[slot].u, particles_[slot].vol);  // reused mid-flight
+  particles_[slot] = {u, v, vu, vv, life, kind, vol};
 }
 
 void SideView::emitWallCurl(int side, float dt) {
   // Where does the surface meet the wall on this side? The wall at height v
   // is at |u| = sqrt(R^2 - v^2); a few iterations converge.
+  if (bowl_) {
+    emitBowlCurl(side, dt);
+    return;
+  }
   float u = side * (RADIUS - 2);
   float v = surfaceAt(u);
   for (int k = 0; k < 3; k++) {
@@ -356,7 +450,80 @@ void SideView::emitWallCurl(int side, float dt) {
     emit(u + nu * in + tu * along, v + nv * in + tv * along,
          tu * s, tv * s, 1, m_.curlLife);
   }
-  foam_[cell] = fmaxf(foam_[cell], fminf(rise / 600, 0.5f));
+  if (n > 0) consumeWallFoam(side);
+}
+
+void SideView::consumeWallFoam(int side) {
+  int cells = (int)(CURL_CONSUMES_PX / DX) + 1;
+  for (int k = 0; k < cells; k++) foam_[side > 0 ? N - 1 - k : k] = 0;
+  for (int k = 0; k < MAX_PARTICLES; k++) {
+    Particle &p = particles_[k];
+    if (p.kind == 3 && side * p.u > RADIUS - CURL_CONSUMES_PX) {
+      p.kind = 0;  // flecks riding the surface there are swept up too
+    }
+  }
+}
+
+void SideView::emitBowlCurl(int side, float dt) {
+  int s = side > 0 ? 1 : 0;
+  // Where the water's edge is on this wall (before anything is skimmed off),
+  // and how fast it's climbing. While it's past the equator, keep the speed
+  // it arrived with (easing off), since that's the speed of the jet.
+  int edge = side > 0 ? N - 1 : 0;
+  while (edge != N / 2 && dep_[edge] <= WET) edge -= side;
+  float e = bed_[edge] + dep_[edge];
+  if (dt > 0) {
+    if (e < -2) {
+      float a = 1.0f - expf(-dt / CLIMB_SMOOTHING);
+      climb_[s] += ((e - edgeV_[s]) / dt - climb_[s]) * a;
+    } else {
+      climb_[s] *= expf(-dt / 0.3f);
+    }
+  }
+  edgeV_[s] = fminf(e, 0.0f);  // the skimming below caps it at the equator
+  // Water above the wall in the outermost cells: the wall at u reaches up to
+  // +sqrt(R^2 - u^2) (0 at the equator), so anything higher would be under
+  // the overhang. Take it out of the body.
+  float took = 0;
+  for (int k = 0; k < OVERHANG_CELLS; k++) {
+    int c = side > 0 ? N - 1 - k : k;
+    float u = -RADIUS + c * DX;
+    float w2 = RADIUS * RADIUS - u * u;
+    float top = w2 > 0 ? sqrtf(w2) : 0;
+    if (restLevel_ > top) continue;  // bowl filled past here by leaning back: not a curl
+    float excess = bed_[c] + dep_[c] - top;
+    if (excess <= 0) continue;
+    mom_[c] *= (dep_[c] - excess) / dep_[c];
+    dep_[c] -= excess;
+    took += excess * DX;
+  }
+  if (took > 0) {
+    // Remember the speed of the water that left, weighted by how much.
+    float speed = fminf(fmaxf(climb_[s] * m_.curlSpeedGain * BOWL_LAUNCH_BOOST, BOWL_MIN_LAUNCH), m_.curlMaxSpeed);
+    curlSpeed_[s] = (curlSpeed_[s] * curlWater_[s] + speed * took) / (curlWater_[s] + took);
+    curlWater_[s] += took;
+  }
+  if (curlWater_[s] < CURL_PIECE_WATER) return;
+
+  // Launch from the equator on this side, straight up the wall; the wall
+  // bends the pieces inward as they climb.
+  float u = side * (RADIUS - 2);
+  float nu = -(float)side;  // inward
+  int pieces = (int)(curlWater_[s] / CURL_PIECE_WATER);
+  if (pieces > 0) consumeWallFoam(side);
+  for (int k = 0; k < pieces; k++) {
+    if (particleBudget_ < 1) break;
+    float depth = random01();  // 0 = against the wall, 1 = innermost
+    float sp = curlSpeed_[s] * (1 - m_.curlInnerSlowdown * depth) * (0.95f + 0.1f * random01());
+    float in = 1.5f + depth * m_.curlThickness;
+    emit(u + nu * in, random01() * 4, 0, sp, 1, m_.curlLife, CURL_PIECE_WATER);
+    curlWater_[s] -= CURL_PIECE_WATER;
+  }
+  // Out of particle budget: don't let water pile up unseen; give it back.
+  if (curlWater_[s] > 4 * CURL_PIECE_WATER) {
+    returnWater(u, curlWater_[s]);
+    curlWater_[s] = 0;
+  }
 }
 
 void SideView::emitCrestSpray(float dt) {
@@ -382,6 +549,7 @@ void SideView::updateParticles(float dt) {
     if (!p.kind) continue;
     p.life -= dt;
     if (p.life <= 0) {
+      returnWater(p.u, p.vol);
       p.kind = 0;
       continue;
     }
@@ -420,11 +588,14 @@ void SideView::updateParticles(float dt) {
     if (p.vv < 0 && p.v < surface) {
       int cell = (int)((p.u + RADIUS) / DX + 0.5f);
       if (cell >= 0 && cell < N) foam_[cell] = fmaxf(foam_[cell], m_.landingFoam);
+      returnWater(p.u, p.vol);
+      p.vol = 0;
       p.kind = 3;
       p.life = m_.fleckLife;
       p.v = surface;
       p.vu = p.vv = 0;
     } else if (p.v < surface - 2) {
+      returnWater(p.u, p.vol);
       p.kind = 0;
     }
   }
@@ -539,8 +710,8 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
     if (m_.bloopSpeed > 0) {
       // A gas bubble: flow into cell j from both sides lifts the surface
       // there (spreading as a tiny ring of waves), and a small blob pops out.
-      q_[j] += strength;
-      q_[j + 1] -= strength;
+      kickFlow(j, strength);
+      kickFlow(j + 1, -strength);
       float u = -RADIUS + j * DX;
       int blobs = 1 + (random01() < 0.4f ? 1 : 0);
       for (int b = 0; b < blobs; b++) {
@@ -549,24 +720,46 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
              m_.bloopSpeed * (0.7f + 0.4f * random01()), 1, m_.curlLife - m_.curlBlobTime * 0.7f);
       }
     } else {
-      q_[j] += (random01() < 0.5f ? -1 : 1) * strength;
+      kickFlow(j, (random01() < 0.5f ? -1 : 1) * strength);
     }
   }
 
-  float aSide = softClip(side + boost + swell_) * g_;
+  float aSide = softClip(side + boost + swell_) * (bowl_ ? gBowl_ : g_);
 
   // Churning water loses energy faster: extra damping above CALM_RMS.
+  // (Bowl model: only where there's water; dry cells sit at the floor.)
   float sumSq = 0;
-  for (int i = 0; i < N; i++) sumSq += h_[i] * h_[i];
-  float rms = sqrtf(sumSq / N);
+  int counted = 0;
+  for (int i = 0; i < N; i++) {
+    if (bowl_ && dep_[i] <= WET) continue;
+    sumSq += h_[i] * h_[i];
+    counted++;
+  }
+  float rms = counted ? sqrtf(sumSq / counted) : 0;
   float churn = fminf(fmaxf((rms - CALM_RMS) / (CHURN_RMS - CALM_RMS), 0.0f), 1.0f);
-  damping_ = m_.damping + TURBULENT_DAMPING * churn;
+  damping_ = m_.damping * (bowl_ ? BOWL_DAMPING_SCALE : 1.0f) + TURBULENT_DAMPING * churn;
 
   // Refill the particle budget.
   particleBudget_ = fminf(particleBudget_ + PARTICLES_PER_SECOND * dt, PARTICLE_BURST);
 
-  for (float t = 0; t < dt; t += SUBSTEP) {
-    step(fminf(SUBSTEP, dt - t), aSide);
+  if (bowl_) {
+    fillBowl();
+    // Substeps sized so no wave crosses more than BOWL_CFL of a cell.
+    float amax = 1;
+    for (int i = 0; i < N; i++) {
+      if (dep_[i] <= 0) continue;
+      float a = fabsf(mom_[i] / dep_[i]) + sqrtf(gBowl_ * dep_[i]);
+      if (a > amax) amax = a;
+    }
+    int n = (int)ceilf(dt * amax / (BOWL_CFL * DX));
+    if (n < 1) n = 1;
+    if (n > MAX_BOWL_SUBSTEPS) n = MAX_BOWL_SUBSTEPS;
+    for (int k = 0; k < n; k++) stepBowl(dt / n, aSide);
+    syncBowl();
+  } else {
+    for (float t = 0; t < dt; t += SUBSTEP) {
+      step(fminf(SUBSTEP, dt - t), aSide);
+    }
   }
   // How fast each cell's surface is rising, then spray and the wall curl.
   if (dt > 0) {
@@ -578,6 +771,7 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
     emitWallCurl(+1, dt);
     emitCrestSpray(dt);
     updateParticles(dt);
+    if (bowl_) syncBowl();  // curl pieces took water out or gave it back
   }
 
   // How long the water has been visibly still (all flow slow).
@@ -588,6 +782,88 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
   updateFoam(dt);
   prepareRender();
   prepareParticles();
+}
+
+void SideView::fillBowl() {
+  // The level rises with lean (setLean): add or remove water to match the
+  // volume a flat surface at restLevel_ would hold, spread over the wet cells.
+  // Water in flight (curl pieces, and overflow about to leave) still counts.
+  float target = 0, now = (curlWater_[0] + curlWater_[1]) / DX;
+  for (int k = 0; k < MAX_PARTICLES; k++) {
+    if (particles_[k].kind) now += particles_[k].vol / DX;
+  }
+  int wet = 0;
+  for (int i = 0; i < N; i++) {
+    target += fmaxf(restLevel_ - bed_[i], 0.0f);
+    now += dep_[i];
+    if (dep_[i] > WET) wet++;
+  }
+  float diff = target - now;
+  if (fabsf(diff) < 0.01f || wet == 0) return;
+  float each = diff / wet;
+  for (int i = 0; i < N; i++) {
+    if (dep_[i] > WET) dep_[i] = fmaxf(dep_[i] + each, 0.0f);
+  }
+}
+
+void SideView::syncBowl() {
+  // Everything else (rendering, curl, foam, stillness) reads the surface as
+  // h_ (relative to the rest level) and flow speeds at the faces as q_.
+  for (int i = 0; i < N; i++) h_[i] = bed_[i] + dep_[i] - restLevel_;
+  q_[0] = q_[N] = 0;
+  for (int j = 1; j < N; j++) {
+    float wl = dep_[j - 1] > WET ? mom_[j - 1] / dep_[j - 1] : 0;
+    float wr = dep_[j] > WET ? mom_[j] / dep_[j] : 0;
+    q_[j] = 0.5f * (wl + wr);
+  }
+}
+
+void SideView::stepBowl(float dt, float aSide) {
+  const float g = gBowl_;
+  // Fluxes at the N+1 faces. Face j sits between cells j-1 and j; beyond
+  // each wall is a mirror-image cell (same depth, opposite flow), so the
+  // walls reflect.
+  float fluxD[N + 1], fluxMLeft[N + 1], fluxMRight[N + 1];
+  for (int j = 0; j <= N; j++) {
+    int l = j > 0 ? j - 1 : 0, r = j < N ? j : N - 1;
+    float dl = dep_[l], dr = dep_[r];
+    float wl = dl > 1e-3f ? mom_[l] / dl : 0;
+    float wr = dr > 1e-3f ? mom_[r] / dr : 0;
+    if (j == 0) wl = -wr;      // mirror at the left wall
+    if (j == N) wr = -wl;      // mirror at the right wall
+    // Hydrostatic reconstruction: depths seen at the face, over the higher floor.
+    float bStar = fmaxf(bed_[l], bed_[r]);
+    float hl = fmaxf(bed_[l] + dl - bStar, 0.0f);
+    float hr = fmaxf(bed_[r] + dr - bStar, 0.0f);
+    // Rusanov flux: the average of both sides' fluxes, plus diffusion at the
+    // fastest local wave speed.
+    float a = fmaxf(fabsf(wl) + sqrtf(g * hl), fabsf(wr) + sqrtf(g * hr));
+    float fd = 0.5f * (hl * wl + hr * wr) - 0.5f * a * (hr - hl);
+    float fm = 0.5f * (hl * wl * wl + 0.5f * g * hl * hl + hr * wr * wr + 0.5f * g * hr * hr) -
+               0.5f * a * (hr * wr - hl * wl);
+    fluxD[j] = fd;
+    // The floor's push, folded into the momentum flux on each side.
+    fluxMLeft[j] = fm + 0.5f * g * (dl * dl - hl * hl);   // as seen by cell j-1
+    fluxMRight[j] = fm + 0.5f * g * (dr * dr - hr * hr);  // as seen by cell j
+  }
+  const float keep = 1.0f - damping_ * dt;
+  const float k = dt / DX;
+  for (int i = 0; i < N; i++) {
+    float d = dep_[i] - k * (fluxD[i + 1] - fluxD[i]);
+    float m = mom_[i] - k * (fluxMLeft[i + 1] - fluxMRight[i]);
+    if (d < 1e-3f) {
+      d = fmaxf(d, 0.0f);
+      m = 0;
+    } else {
+      m = (m + dt * d * aSide) * keep;
+      // Thin films at the shoreline can get absurd speeds: cap them.
+      float lim = d * MAX_FLOW_SPEED;
+      if (m > lim) m = lim;
+      if (m < -lim) m = -lim;
+    }
+    dep_[i] = d;
+    mom_[i] = m;
+  }
 }
 
 void SideView::step(float dt, float aSide) {
@@ -617,8 +893,24 @@ void SideView::step(float dt, float aSide) {
 }
 
 void SideView::updateFoam(float dt) {
+  // Foam floats: carry it with the flow first. Each cell takes the foam from
+  // where its water was a moment ago (upstream), so a swell running up the
+  // wall carries foam with it, and foam gathers at the water's edge.
+  float carried[N];
+  for (int i = 0; i < N; i++) {
+    float w = 0.5f * (q_[i] + q_[i + 1]);       // flow speed at the cell, px/s
+    float from = i - w * dt / DX;               // where this water came from, in cells
+    if (from <= 0) carried[i] = foam_[0];
+    else if (from >= N - 1) carried[i] = foam_[N - 1];
+    else {
+      int j = (int)from;
+      float f = from - j;
+      carried[i] = foam_[j] + (foam_[j + 1] - foam_[j]) * f;
+    }
+  }
   float decay = expf(-dt / m_.foamFadeTime);
   for (int i = 0; i < N; i++) {
+    foam_[i] = carried[i];
     // Fast flow and sharp crests whip up foam.
     float flow = fabsf(q_[i] + q_[i + 1]) * 0.5f;
     float left = h_[i > 0 ? i - 1 : i], right = h_[i < N - 1 ? i + 1 : i];
@@ -648,16 +940,28 @@ void SideView::prepareRender() {
       h = h_[i] + (h_[i + 1] - h_[i]) * f;
       foam = foam_[i] + (foam_[i + 1] - foam_[i]) * f;
     }
-    surfaceQ_[k] = (int32_t)((restLevel_ + h) * 65536.0f);
+    float u = (float)(k - TABLE_OFFSET);
+    float v = restLevel_ + h;
     foamPx_[k] = (uint8_t)(1 + foam * m_.foamMaxPx + 0.5f);  // always at least a thin line
+    // Dry bowl floor (the surface down at the circle): no water, no foam
+    // line and no anti-aliased edge tracing the empty wall. Push the surface
+    // just outside the circle.
+    float f2 = RADIUS * RADIUS - u * u;
+    float floorV = -(f2 > 0 ? sqrtf(f2) : 0);
+    if (v < floorV + WET) {
+      v = floorV - 2;
+      foamPx_[k] = 0;
+    }
+    surfaceQ_[k] = (int32_t)(v * 65536.0f);
 
     // Distance to the wall at the surface's height (the wall is a circle,
     // so at height v it sits at |u| = sqrt(R^2 - v^2)), for the froth fade.
-    float u = (float)(k - TABLE_OFFSET);
-    float v = restLevel_ + h;
     float w2 = RADIUS * RADIUS - v * v;
     float wallDist = (w2 > 0 ? sqrtf(w2) : 0) - fabsf(u);
     float t = wallDist / WALL_FADE_PX;
+    // The fade is for the thin surface line (so the curl grows out of the
+    // water); real foam carried to the wall stays white.
+    t = fmaxf(t, foam * 2.0f);
     foamShade_[k] = (uint8_t)(t <= 0 ? 0 : (t >= 1 ? FOAM_SHADES - 1 : t * (FOAM_SHADES - 1) + 0.5f));
   }
   // Water-frame axes: horizontal h = (downY, -downX), down d = (downX, downY).

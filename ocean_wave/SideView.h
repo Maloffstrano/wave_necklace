@@ -26,6 +26,12 @@ class SideView {
   // blending between materials.
   void setMaterial(const Material &m);
 
+  // Which water model runs (shared rendering, curl and materials):
+  //   classic: a flat-bottomed rectangular tank, the circle only a mask
+  //   bowl: the circle is the container; water runs up the curved wall
+  void setBowlModel(bool on);
+  bool bowlModel() const { return bowl_; }
+
   // Calm water: clears all waves and foam.
   void reset();
 
@@ -55,13 +61,20 @@ class SideView {
   static constexpr float DX = 2 * RADIUS / (N - 1);  // 4 px between cells
 
   void step(float dt, float aSide);
+  void stepBowl(float dt, float aSide);
+  void syncBowl();                      // bowl state -> h_ and q_ (used by everything else)
+  void fillBowl();                      // keep the bowl's volume at the current level
+  void kickFlow(int face, float dv);    // add flow speed at a face, in either model
   void splash(float jolt);
 
   // ---- Spray and curl particles (see SideView.cpp) ----
   float surfaceAt(float u) const;  // surface height (v, px) at position u across the bowl
-  void emit(float u, float v, float vu, float vv, uint8_t kind, float life);
+  void emit(float u, float v, float vu, float vv, uint8_t kind, float life, float vol = 0);
+  void returnWater(float u, float vol);  // bowl model: a piece's water rejoins the body
+  void emitBowlCurl(int side, float dt); // bowl model: water climbing past the equator
   void emitWallCurl(int side, float dt);
   void emitCrestSpray(float dt);
+  void consumeWallFoam(int side);  // a forming curl sweeps up the foam at its wall
   void updateParticles(float dt);
   void prepareParticles();
   void drawParticles(uint16_t *pixels, int16_t y0, int16_t rows) const;
@@ -71,6 +84,17 @@ class SideView {
 
   Material m_ = WATER;  // the fluid
   float g_ = 0;         // wave model gravity, from m_ (waveSpeed^2 / depth)
+  float gBowl_ = 0;     // the bowl model's gravity (waveSpeed at the centre at rest)
+
+  // Bowl model state: one column of water per cell, standing on the round floor.
+  bool bowl_ = false;
+  float bed_[N] = {};   // floor height at each cell (the circle), px
+  float dep_[N] = {};   // water depth above the floor, px (0 = dry)
+  float mom_[N] = {};   // momentum: depth * flow speed
+  float curlWater_[2] = {};  // overflow waiting to leave as curl pieces (left, right), px^2
+  float curlSpeed_[2] = {};  // launch speed for that water, px/s
+  float edgeV_[2] = {};      // where the water's edge was on each wall last frame (v, px)
+  float climb_[2] = {};      // how fast the edge is climbing the wall, px/s
 
   // Simulation state
   float h_[N] = {};        // surface height per cell, px above the rest level
@@ -94,6 +118,7 @@ class SideView {
     float vu, vv;  // velocity, px/s
     float life;    // seconds left
     uint8_t kind;  // 0 = dead, 1 = curl sheet, 2 = droplet, 3 = fleck riding the surface
+    float vol;     // bowl model: water this piece carries (px^2), returned when it lands
   };
   static constexpr int MAX_PARTICLES = 480;
   Particle particles_[MAX_PARTICLES] = {};

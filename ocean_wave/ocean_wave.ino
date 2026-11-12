@@ -14,7 +14,7 @@
 // Flat face up: the top-down pool (PoolView.cpp); touch it to make ripples.
 // Touch and hold (anywhere): the backlight drops to dimmest and ramps up
 // toward full; release to keep that brightness. A quick tap is left free
-// (in the pool it makes a ripple).
+// (in the pool it makes a ripple). Swipe sideways: water <-> lava.
 
 #include <NecklaceBoard.h>
 #include "FreeSans12pt7b.h"
@@ -54,6 +54,24 @@ Screen screen = Screen::Wave;
 // The two views of the water (see SideView.cpp and PoolView.cpp).
 SideView water;
 PoolView pool;
+
+// ---- Material: water or lava ----
+// A swipe switches; the change blends every setting (physics and colours)
+// over MATERIAL_BLEND_S, so the fluid thickens into lava or thins back into
+// water with its waves carrying on.
+const float MATERIAL_BLEND_S = 1.5f;
+float lavaAmount = 0;   // 0 = water .. 1 = lava (what's showing now)
+float lavaTarget = 0;   // where it's heading
+
+void updateMaterial(float dt) {
+  if (lavaAmount == lavaTarget) return;
+  float step = dt / MATERIAL_BLEND_S;
+  lavaAmount = lavaTarget > lavaAmount ? fminf(lavaAmount + step, lavaTarget) : fmaxf(lavaAmount - step, lavaTarget);
+  float t = lavaAmount * lavaAmount * (3 - 2 * lavaAmount);  // smoothstep: eases in and out
+  Material m = Material::mix(WATER, LAVA, t);
+  water.setMaterial(m);
+  pool.setMaterial(m);
+}
 
 // ---- Orientation ----
 // Lean averaged over about half a second, so a quick swing or a bump doesn't
@@ -299,17 +317,38 @@ void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
 // tap (finger landing) steps the backlight.
 // ============================================================================
 
+// Swipe: the finger travels this far sideways (mostly sideways) soon after
+// landing. A finger that moves at all can't start dimming, so the two
+// gestures never clash.
+const int16_t SWIPE_PX = 80;
+const uint32_t SWIPE_MS = 600;
+const int16_t STILL_PX = 25;  // moved further than this: not a hold
+
 bool fingerDown = false;
 int16_t fingerX = 0, fingerY = 0;
+int16_t fingerStartX = 0, fingerStartY = 0;
 uint32_t fingerDownMs = 0;
+bool fingerMoved = false, fingerSwiped = false;
 
 void readFinger() {
   bool was = fingerDown;
   fingerDown = readTouch(fingerX, fingerY);
   if (!fingerDown) return;
-  if (!was) fingerDownMs = millis();
-  uint32_t held = millis() - fingerDownMs;
-  if (held < DIM_HOLD_MS) return;
+  uint32_t now = millis();
+  if (!was) {
+    fingerDownMs = now;
+    fingerStartX = fingerX;
+    fingerStartY = fingerY;
+    fingerMoved = fingerSwiped = false;
+  }
+  uint32_t held = now - fingerDownMs;
+  int16_t dx = fingerX - fingerStartX, dy = fingerY - fingerStartY;
+  if (abs(dx) > STILL_PX || abs(dy) > STILL_PX) fingerMoved = true;
+  if (!fingerSwiped && held < SWIPE_MS && abs(dx) > SWIPE_PX && abs(dx) > 2 * abs(dy)) {
+    fingerSwiped = true;
+    lavaTarget = lavaTarget > 0.5f ? 0.0f : 1.0f;  // either direction toggles
+  }
+  if (fingerMoved || held < DIM_HOLD_MS) return;
   // Adjusting: dimmest for DIM_PAUSE_MS, then ramp to full over DIM_RAMP_S.
   uint32_t ramp = held - DIM_HOLD_MS;
   float t = ramp < DIM_PAUSE_MS ? 0.0f : fminf((ramp - DIM_PAUSE_MS) / 1000.0f / DIM_RAMP_S, 1.0f);
@@ -371,8 +410,10 @@ void loop() {
   if (jolt > peakJoltShown) peakJoltShown = jolt;
 
   static uint32_t lastOrientation = 0;
-  if (motionOk) updateOrientation(m, lastOrientation ? (t0 - lastOrientation) / 1e6f : 0.0f);
+  float loopDt = lastOrientation ? (t0 - lastOrientation) / 1e6f : 0.0f;
+  if (motionOk) updateOrientation(m, loopDt);
   lastOrientation = t0;
+  updateMaterial(fminf(loopDt, 0.1f));
 
   updateRest(jolt, fingerDown);
   updateBacklight();

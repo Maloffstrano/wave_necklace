@@ -67,6 +67,7 @@ backup/                       factory firmware dump (git-ignored)
 - Backlight: LEDC on GPIO5, 20 kHz, 10-bit; duty 1024 = fully on.
 - Buttons: BOOT = GPIO0 (active low, free after boot); PWR = GPIO6 (active low); RST is a hardware reset. **Power latch GPIO7 must be HIGH or the board turns off on battery when PWR is released.** NecklaceBoard::begin() sets it; powerOff() clears it.
 - ocean_wave controls: BOOT short press toggles Wave/Diagnostics screens; short PWR press calms the water (SideView::reset); hold PWR 2 s = power off.
+- Lava (Material LAVA): thick, slow, glowing; gas bubbles in still lava (side view: a small blob pops off the surface; pool: tiny rings). Swipe sideways (> 80 px within 0.6 s, mostly horizontal) toggles water <-> lava, blending every Material field over 1.5 s (smoothstep). A finger that moves > 25 px can't start hold-to-dim. The choice isn't saved across power-off yet.
 - Fonts: the built-in font looks blocky when scaled. Use GFXfont files (Adafruit FreeFonts with the `#include <Adafruit_GFX.h>` line removed). They draw no background, so recolouring identical text is flicker-free, but changing the text needs an erase.
 
 ## Status and next steps (as of 2026-11-10)

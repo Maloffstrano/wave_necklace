@@ -10,8 +10,9 @@
 // Ripples come from:
 //   - a finger: one drop where it lands
 //   - a sharp jab: a ring in from the whole rim that focuses at the centre
-// (No random drops: the user found taps and jabs entertaining enough, and
-// still water in a still bowl is right.)
+//   - lava only: a gas bubble now and then (Material::poolBloop)
+// (No random drops in water: the user found taps and jabs entertaining
+// enough, and still water in a still bowl is right.)
 //
 // ---- The look ----
 // The resting colour is exactly what the side view shows when the bowl is
@@ -38,6 +39,8 @@ namespace {
 // colours) is in Material.h / Material.cpp.
 const float STEP_RATE = 120.0f;       // physics steps per second
 const float RING_JOLT = 0.6f;         // g: a jab harder than this rings the whole rim
+// Gas bubbles (lava only, Material::poolBloop): now and then, every
+// Material::dropInterval on average, the surface lifts at a random spot.
 const float SETTLE_TIME = 1.5f;       // s after the pool appears: ignore bumps (it's being set down)
 const float TOUCH_QUIET = 0.3f;       // s after a finger lands: ignore bumps (the tap shook the board)
 
@@ -86,6 +89,14 @@ void buildPalette(const Material &m) {
   }
 }
 
+uint32_t rngState = 0x9E3779B9;
+float random01() {
+  rngState ^= rngState << 13;
+  rngState ^= rngState >> 17;
+  rngState ^= rngState << 5;
+  return (rngState & 0xFFFFFF) / 16777216.0f;
+}
+
 }  // namespace
 
 void PoolView::setMaterial(const Material &m) {
@@ -110,6 +121,7 @@ void PoolView::reset() {
   for (int j = 0; j < GRID; j++)
     for (int i = 0; i < GRID; i++) h_[j][i] = prev_[j][i] = 0;
   settleTimer_ = SETTLE_TIME;
+  bloopTimer_ = m_.dropInterval;
 }
 
 void PoolView::drop(float cx, float cy, float radius, float strength) {
@@ -201,6 +213,15 @@ void PoolView::update(float dt, float jolt, float gx, float gy) {
   // Only a sharp jab disturbs the pool: smaller bumps come from handling it
   // (turning it on the table), and drops scattered by those looked random.
   if (jolt > RING_JOLT) ring(m_.ringGain * sqrtf(jolt));
+
+  if (m_.poolBloop > 0) {
+    bloopTimer_ -= dt;
+    if (bloopTimer_ <= 0) {
+      bloopTimer_ = m_.dropInterval * (0.3f + 1.4f * random01());
+      float a = random01() * 2 * PI, r = sqrtf(random01()) * (RADIUS_CELLS - 6);
+      drop(CENTRE + r * cosf(a), CENTRE + r * sinf(a), 2.0f, -m_.poolBloop * (0.6f + 0.8f * random01()));  // negative: lifts
+    }
+  }
 
 
   stepTimer_ += dt;

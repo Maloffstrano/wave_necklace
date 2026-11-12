@@ -18,22 +18,51 @@ Material Material::mix(const Material &a, const Material &b, float t) {
 // Water: slow and stately (the tuning history is in things-I-learned.md).
 const Material WATER = {
     // wave model
-    /*waveSpeed*/ 165, /*depth*/ 100, /*damping*/ 0.9f, /*smoothing*/ 0.06f,
-    /*sensitivity*/ 0.35f, /*swellAmplitude*/ 0.012f, /*dropStrength*/ 30,
+    .waveSpeed = 165, .depth = 100, .damping = 0.9f, .smoothing = 0.06f,
+    .sensitivity = 0.35f, .swellAmplitude = 0.012f, .dropStrength = 30,
+    .dropInterval = 1.8f, .bloopSpeed = 0,
     // splashes
-    /*splashGain*/ 90, /*maxSplash*/ 110, /*splashDroplets*/ 25,
+    .splashGain = 90, .maxSplash = 110, .splashDroplets = 25,
     // curl and spray
-    /*particleGravity*/ 1000, /*curlSpeedGain*/ 2.8f, /*curlMinSpeed*/ 220, /*curlMaxSpeed*/ 410,
-    /*curlEmitRate*/ 0.04f, /*curlThickness*/ 12, /*curlInnerSlowdown*/ 0.35f,
-    /*curlLife*/ 2.0f, /*curlBlobTime*/ 0.45f, /*curlBlobR*/ 6, /*curlSheetR*/ 2, /*curlShadeTime*/ 0.9f,
-    /*sprayMinRise*/ 220, /*sprayChance*/ 0.0003f, /*wallFriction*/ 1.2f, /*wallBounce*/ 0.25f,
+    .particleGravity = 1000, .curlSpeedGain = 2.8f, .curlMinSpeed = 220, .curlMaxSpeed = 410,
+    .curlEmitRate = 0.04f, .curlThickness = 12, .curlInnerSlowdown = 0.35f,
+    .curlLife = 2.0f, .curlBlobTime = 0.45f, .curlBlobR = 6, .curlSheetR = 2, .curlShadeTime = 0.9f,
+    .sprayMinRise = 220, .sprayChance = 0.0003f, .wallFriction = 1.2f, .wallBounce = 0.25f,
     // foam
-    /*foamMaxPx*/ 3, /*foamFlowGain*/ 0.012f, /*foamCrestGain*/ 0.25f, /*foamFadeTime*/ 0.6f,
-    /*landingFoam*/ 0.6f, /*fleckLife*/ 0.8f,
+    .foamMaxPx = 3, .foamFlowGain = 0.012f, .foamCrestGain = 0.25f, .foamFadeTime = 0.6f,
+    .landingFoam = 0.6f, .fleckLife = 0.8f,
     // colours
-    /*deep*/ {10, 30, 70}, /*surface*/ {50, 180, 240}, /*curve*/ {2, 1, 1}, /*depthRange*/ 190,
-    /*froth*/ {205, 232, 252}, /*sheet*/ {140, 205, 245}, /*spray*/ {200, 235, 255},
-    /*droplet*/ {240, 248, 255}, /*poolShadow*/ {2, 8, 25}, /*poolGlint*/ {245, 250, 255},
+    .deep = {10, 30, 70}, .surface = {50, 180, 240}, .curve = {2, 1, 1}, .depthRange = 190,
+    .froth = {205, 232, 252}, .sheet = {140, 205, 245}, .spray = {200, 235, 255},
+    .droplet = {240, 248, 255}, .poolShadow = {2, 8, 25}, .poolGlint = {245, 250, 255},
     // pool
-    /*rippleSpeed*/ 160, /*rippleDamping*/ 0.8f, /*lightGain*/ 9, /*touchDrop*/ 6, /*ringGain*/ 2,
+    .rippleSpeed = 160, .rippleDamping = 0.8f, .lightGain = 9, .touchDrop = 6, .ringGain = 2, .poolBloop = 0,
+};
+
+// Lava: thick, slow and glowing. Waves at about 0.4x water's speed, so (see
+// the rules of thumb) splash strength scales down with it; heavy damping and
+// smoothing make it gloopy. No spray: the curl is a few fat, slow blobs that
+// stick to the wall and plop back. Hot (bright) just under the surface,
+// deepening to dark red.
+const Material LAVA = {
+    // wave model
+    .waveSpeed = 70, .depth = 100, .damping = 2.5f, .smoothing = 0.2f,
+    .sensitivity = 0.25f, .swellAmplitude = 0.006f, .dropStrength = 10,
+    .dropInterval = 4.0f, .bloopSpeed = 130,
+    // splashes
+    .splashGain = 40, .maxSplash = 50, .splashDroplets = 4,
+    // curl and spray
+    .particleGravity = 700, .curlSpeedGain = 5, .curlMinSpeed = 180, .curlMaxSpeed = 345,
+    .curlEmitRate = 0.03f, .curlThickness = 14, .curlInnerSlowdown = 0.2f,
+    .curlLife = 2.5f, .curlBlobTime = 1.2f, .curlBlobR = 7, .curlSheetR = 4, .curlShadeTime = 1.5f,
+    .sprayMinRise = 100000, .sprayChance = 0, .wallFriction = 4, .wallBounce = 0.05f,
+    // foam (the glowing edge)
+    .foamMaxPx = 2, .foamFlowGain = 0.02f, .foamCrestGain = 0.3f, .foamFadeTime = 1.5f,
+    .landingFoam = 0.5f, .fleckLife = 1.5f,
+    // colours
+    .deep = {90, 5, 0}, .surface = {255, 150, 20}, .curve = {1, 1.6f, 3}, .depthRange = 220,
+    .froth = {255, 225, 120}, .sheet = {255, 110, 10}, .spray = {255, 190, 70},
+    .droplet = {255, 235, 170}, .poolShadow = {30, 0, 0}, .poolGlint = {255, 245, 190},
+    // pool
+    .rippleSpeed = 70, .rippleDamping = 2.5f, .lightGain = 14, .touchDrop = 8, .ringGain = 2.5f, .poolBloop = 1.5f,
 };

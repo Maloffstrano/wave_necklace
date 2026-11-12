@@ -60,6 +60,7 @@ class PoolView {
   Material m_ = WATER;
   float k_ = 0;                   // wave equation coefficient from the ripple speed
   float stepTimer_ = 0;
+  float bloopTimer_ = 0;          // s until the next gas bubble (lava)
   float settleTimer_ = 0;         // s left in which bumps are ignored
   float touchQuiet_ = 0;          // s left in which bumps are ignored after a tap
   float pendingJolt_ = 0;         // last frame's jolt, held back one frame

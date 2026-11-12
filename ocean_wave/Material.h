@@ -24,6 +24,8 @@ struct Material {
   float sensitivity;      // boost for small quick motions = this * sqrt(|change| in g)
   float swellAmplitude;   // g: lazy drifting push, so still water isn't frozen
   float dropStrength;     // px/s of flow from an ambient drop in still water
+  float dropInterval;     // s: average time between ambient drops (once it's still)
+  float bloopSpeed;       // px/s: a gas bubble pops, throwing a blob this fast (0 = plain drops)
 
   // ---- Side view: splashes from jolts ----
   float splashGain;       // px/s of flow per sqrt(g) of jolt
@@ -74,9 +76,11 @@ struct Material {
   float lightGain;        // palette steps per px of height difference
   float touchDrop;        // px: ripple from a tap
   float ringGain;         // px per sqrt(g) of a sharp jab
+  float poolBloop;        // px: a gas bubble now and then in the still pool (0 = none)
 
   // Blend: t = 0 gives a, t = 1 gives b.
   static Material mix(const Material &a, const Material &b, float t);
 };
 
 extern const Material WATER;
+extern const Material LAVA;

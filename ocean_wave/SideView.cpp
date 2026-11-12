@@ -96,9 +96,10 @@ const float MAX_BOOST = 0.25f;        // g
 
 // Ambient life, so still water never looks frozen: a lazy swell
 // (Material::swellAmplitude) and, once it has been still for a while, small
-// drops (Material::dropStrength).
+// drops (Material::dropStrength, dropInterval). In lava a drop is a gas
+// bubble popping (Material::bloopSpeed): the surface lifts and a small blob
+// jumps just off it and falls back.
 const float SWELL_PERIOD = 2.5f;      // s: how often the swell picks a new target
-const float DROP_INTERVAL = 1.8f;     // s: average time between small random disturbances
 const float QUIET_BEFORE_DROPS = 3.0f;  // s without splashes or real motion before drops start
 const float ACTIVE_BOOST = 0.02f;     // g: a motion boost above this counts as real motion
 const float STILL_FLOW = 6.0f;        // px/s: every cell's flow below this counts as still
@@ -532,9 +533,24 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
   if (dropTimer_ <= 0 && !settled) {
     dropTimer_ = 0;  // ready to drop as soon as it's been quiet long enough
   } else if (dropTimer_ <= 0) {
-    dropTimer_ = DROP_INTERVAL * (0.3f + 1.4f * random01());
-    int j = 1 + (int)(random01() * (N - 1));
-    q_[j] += (random01() < 0.5f ? -1 : 1) * m_.dropStrength * (0.5f + random01());
+    dropTimer_ = m_.dropInterval * (0.3f + 1.4f * random01());
+    int j = 1 + (int)(random01() * (N - 2));
+    float strength = m_.dropStrength * (0.5f + random01());
+    if (m_.bloopSpeed > 0) {
+      // A gas bubble: flow into cell j from both sides lifts the surface
+      // there (spreading as a tiny ring of waves), and a small blob pops out.
+      q_[j] += strength;
+      q_[j + 1] -= strength;
+      float u = -RADIUS + j * DX;
+      int blobs = 1 + (random01() < 0.4f ? 1 : 0);
+      for (int b = 0; b < blobs; b++) {
+        // Start part-way through the blob's life, so it's already small.
+        emit(u + (random01() * 2 - 1) * 3, surfaceAt(u) + 1, (random01() * 2 - 1) * 25,
+             m_.bloopSpeed * (0.7f + 0.4f * random01()), 1, m_.curlLife - m_.curlBlobTime * 0.7f);
+      }
+    } else {
+      q_[j] += (random01() < 0.5f ? -1 : 1) * strength;
+    }
   }
 
   float aSide = softClip(side + boost + swell_) * g_;

@@ -15,11 +15,13 @@
 // Touch and hold (anywhere): the backlight drops to dimmest and ramps up
 // toward full; release to keep that brightness. A quick tap is left free
 // (in the pool it makes a ripple). Swipe sideways: water <-> lava.
+// The brightness and water/lava choice are remembered across power-off.
 
 #include <NecklaceBoard.h>
 #include "FreeSans12pt7b.h"
 #include "SideView.h"
 #include "PoolView.h"
+#include <Preferences.h>
 
 using namespace NecklaceBoard;
 
@@ -54,6 +56,12 @@ Screen screen = Screen::Wave;
 // The two views of the water (see SideView.cpp and PoolView.cpp).
 SideView water;
 PoolView pool;
+
+// ---- Settings remembered across power-off ----
+// Stored in the ESP32's key-value store in flash (NVS). Flash wears with
+// writes, so they're saved only when settled: brightness when the finger
+// lifts after adjusting, the material when a swipe happens.
+Preferences settings;
 
 // ---- Material: water or lava ----
 // A swipe switches; the change blends every setting (physics and colours)
@@ -329,11 +337,16 @@ int16_t fingerX = 0, fingerY = 0;
 int16_t fingerStartX = 0, fingerStartY = 0;
 uint32_t fingerDownMs = 0;
 bool fingerMoved = false, fingerSwiped = false;
+bool fingerDimming = false;  // this touch is adjusting the brightness
 
 void readFinger() {
   bool was = fingerDown;
   fingerDown = readTouch(fingerX, fingerY);
-  if (!fingerDown) return;
+  if (!fingerDown) {
+    if (was && fingerDimming) settings.putUShort("brightness", brightness);  // released: keep it
+    fingerDimming = false;
+    return;
+  }
   uint32_t now = millis();
   if (!was) {
     fingerDownMs = now;
@@ -347,8 +360,10 @@ void readFinger() {
   if (!fingerSwiped && held < SWIPE_MS && abs(dx) > SWIPE_PX && abs(dx) > 2 * abs(dy)) {
     fingerSwiped = true;
     lavaTarget = lavaTarget > 0.5f ? 0.0f : 1.0f;  // either direction toggles
+    settings.putBool("lava", lavaTarget > 0.5f);
   }
   if (fingerMoved || held < DIM_HOLD_MS) return;
+  fingerDimming = true;
   // Adjusting: dimmest for DIM_PAUSE_MS, then ramp to full over DIM_RAMP_S.
   uint32_t ramp = held - DIM_HOLD_MS;
   float t = ramp < DIM_PAUSE_MS ? 0.0f : fminf((ramp - DIM_PAUSE_MS) / 1000.0f / DIM_RAMP_S, 1.0f);
@@ -389,6 +404,16 @@ void setup() {
   }
   water.begin();
   pool.begin();
+
+  // Remembered settings (defaults on first boot: water, full brightness).
+  settings.begin("necklace", false);
+  brightness = settings.getUShort("brightness", BACKLIGHT_MAX);
+  if (brightness < BRIGHTNESS_MIN || brightness > BACKLIGHT_MAX) brightness = BACKLIGHT_MAX;
+  if (settings.getBool("lava", false)) {
+    lavaAmount = lavaTarget = 1;  // straight to lava, no blend at boot
+    water.setMaterial(LAVA);
+    pool.setMaterial(LAVA);
+  }
 
   NecklaceBoard::setBacklight(brightness);
   bootButton.begin();

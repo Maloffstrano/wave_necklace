@@ -84,7 +84,7 @@ class SideView {
     float u, v;    // position in the water frame (px): u across, v up
     float vu, vv;  // velocity, px/s
     float life;    // seconds left
-    uint8_t kind;  // 0 = dead, 1 = curl sheet, 2 = droplet
+    uint8_t kind;  // 0 = dead, 1 = curl sheet, 2 = droplet, 3 = fleck riding the surface
   };
   static constexpr int MAX_PARTICLES = 480;
   Particle particles_[MAX_PARTICLES] = {};

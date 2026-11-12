@@ -103,12 +103,15 @@ const float TURBULENT_DAMPING = 2.5f; // 1/s extra (churning water loses energy 
 // into an arc that lands back on the water. A stream of those is the curl.
 const float PARTICLE_GRAVITY = 1000.0f;  // px/s^2 (about the wave model's G)
 const float CURL_MIN_HEIGHT = -25.0f;    // px: contact point must be above this (v)
-const float CURL_MIN_RISE = 80.0f;       // px/s: how fast the water must climb the wall
-const float CURL_SPEED_GAIN = 1.4f;      // launch speed = rise rate * this
+const float CURL_SPEED_GAIN = 2.8f;      // launch speed = rise rate * this (doubled when the waves were halved)
+// A slow climb just runs smoothly up the wall (the surface shows that); only
+// launch a tongue when it will clearly leave the water: 220 px/s flies about
+// 24 px (v^2 / 2g) before falling back.
+const float CURL_MIN_SPEED = 220.0f;     // px/s
 // Above about sqrt(g * R) (~420 px/s) particles ride the wall over the top of
 // the bowl ("loop-the-loop") instead of peeling off into a curl.
 const float CURL_MAX_SPEED = 410.0f;     // px/s: just under the loop-the-loop limit
-const float CURL_EMIT_RATE = 0.02f;      // particles per frame per px/s of rise
+const float CURL_EMIT_RATE = 0.04f;      // particles per frame per px/s of rise (doubled with the slower waves)
 // The water running up the wall is a tongue: thick at the base, stretching
 // thin as it climbs. Particles start spread over CURL_THICKNESS px in from the
 // wall; the ones nearest the wall are fastest (they're riding the wall), the
@@ -131,7 +134,10 @@ const float WALL_BOUNCE = 0.25f;         // share of speed kept bouncing off the
 // pulling it off the wall). That detachment is the curl.
 const float WALL_FRICTION = 1.2f;        // 1/s while sliding along the wall
 const float FOAM_MAX_PX = 3.0f;          // foam line: 1 px + up to this much more
-const float LANDING_FOAM = 0.25f;        // foam a landing particle leaves (0..1)
+const float LANDING_FOAM = 0.6f;         // foam a landing particle leaves (0..1): about 2 px thicker
+// Spray doesn't vanish when it lands: it becomes a fleck of foam riding the
+// surface (up and down with it, drifting with the flow), then fades.
+const float FLECK_LIFE = 0.8f;           // s
 
 // ---- Colours (panel byte order) ----
 // The panel is RGB565: only 32 levels of red and blue. A smooth depth gradient
@@ -140,17 +146,23 @@ const float LANDING_FOAM = 0.25f;        // foam a landing particle leaves (0..1
 const int MAX_DEPTH = 400;
 uint16_t depthColor[2][MAX_DEPTH];
 const int EDGE_LEVELS = 16;
-// Near the wall the froth fades from blue-white into the curl sheet's light
-// blue, so the curl visibly grows out of the surface instead of out of a
-// white line. FOAM_SHADES steps from 0 (sheet blue, at the wall) to the last
-// (full froth colour).
+// Near the wall the froth fades from blue-white into the colour of the water
+// just under the surface, which is also the colour of the curl tongue at its
+// base, so the tongue grows out of the water body instead of out of a white
+// line. FOAM_SHADES steps from 0 (water, at the wall) to the last (full froth).
 const int FOAM_SHADES = 8;
 const float WALL_FADE_PX = 50.0f;  // width of the fade, measured from the wall
 uint16_t foamShade[FOAM_SHADES];
 uint16_t edgeColor[FOAM_SHADES][EDGE_LEVELS];  // each shade blended into the black sky, for anti-aliasing
 const uint16_t DROPLET_COLOR = panelColor(RGB565(240, 248, 255));
-const uint16_t SHEET_COLOR = panelColor(RGB565(140, 205, 245));  // the curling sheet of water
-const uint16_t SHEET_EDGE_COLOR = panelColor(RGB565(200, 235, 255));
+// The curl tongue is water: it starts in the colour of the water just under
+// the surface (so its overlapping blobs merge into one smooth shape with the
+// water body), turns to the paler sheet colour as it thins and climbs, then
+// towards white as it flies apart as spray. Falling pieces are always pale.
+const int CURL_SHADES = 12;
+const float CURL_SHADE_TIME = 0.9f;   // s from water colour to spray white
+uint16_t curlShade[CURL_SHADES];
+const int CURL_FALLING_SHADE = CURL_SHADES - 1;  // falling pieces: spray white
 const uint16_t SKY_COLOR = 0;
 
 uint16_t rgb565(float r, float g, float b) {
@@ -171,10 +183,20 @@ void buildColors() {
       depthColor[k][d] = panelColor(rgb565(r * 31 / 255 + off, g * 63 / 255 + off, b * 31 / 255 + off));
     }
   }
-  // Froth shades: curl-sheet blue (140, 205, 245) at the wall -> froth (205, 232, 252).
+  // Water just under the surface (depth 0 above), the base of everything below.
+  const float WR = 50, WG = 180, WB = 240;
+  // Curl shades: water -> sheet blue (140, 205, 245) -> spray (200, 235, 255).
+  for (int c = 0; c < CURL_SHADES; c++) {
+    float t = (float)c / (CURL_SHADES - 1) * 2;  // 0..1 water->sheet, 1..2 sheet->spray
+    float r, g, b;
+    if (t <= 1) { r = WR + (140 - WR) * t; g = WG + (205 - WG) * t; b = WB + (245 - WB) * t; }
+    else { t -= 1; r = 140 + 60 * t; g = 205 + 30 * t; b = 245 + 10 * t; }
+    curlShade[c] = panelColor(rgb565(r * 31 / 255, g * 63 / 255, b * 31 / 255));
+  }
+  // Froth shades: water colour at the wall -> froth (205, 232, 252).
   for (int f = 0; f < FOAM_SHADES; f++) {
     float t = (float)f / (FOAM_SHADES - 1);
-    float r = 140 + (205 - 140) * t, g = 205 + (232 - 205) * t, b = 245 + (252 - 245) * t;
+    float r = WR + (205 - WR) * t, g = WG + (232 - WG) * t, b = WB + (252 - WB) * t;
     foamShade[f] = panelColor(rgb565(r * 31 / 255, g * 63 / 255, b * 31 / 255));
     for (int k = 0; k < EDGE_LEVELS; k++) {
       float a = (k + 0.5f) / EDGE_LEVELS;  // share of the pixel covered by water
@@ -307,7 +329,7 @@ void SideView::emitWallCurl(int side, float dt) {
   if (cell < 0) cell = 0;
   if (cell > N - 1) cell = N - 1;
   float rise = rate_[cell];
-  if (rise < CURL_MIN_RISE) return;
+  if (rise * CURL_SPEED_GAIN < CURL_MIN_SPEED) return;
 
   // Tangent to the wall, pointing up: (-v, u)/R on the right, (v, -u)/R on the left.
   float tu = side > 0 ? -v / RADIUS : v / RADIUS;
@@ -354,6 +376,15 @@ void SideView::updateParticles(float dt) {
       p.kind = 0;
       continue;
     }
+    if (p.kind == 3) {
+      // A fleck riding the surface: drift with the flow underneath.
+      int face = (int)((p.u + RADIUS) / DX + 0.5f);
+      if (face >= 0 && face <= N) p.u += q_[face] * dt;
+      if (p.u > limit) p.u = limit;
+      if (p.u < -limit) p.u = -limit;
+      p.v = surfaceAt(p.u);
+      continue;
+    }
     p.vv -= PARTICLE_GRAVITY * dt;
     p.u += p.vu * dt;
     p.v += p.vv * dt;
@@ -374,12 +405,17 @@ void SideView::updateParticles(float dt) {
       }
     }
 
-    // Back into the water (falling in, or swallowed by a rising wave):
-    // gone, leaving a fleck of foam.
+    // Back into the water. Falling onto the surface: land as a fleck that
+    // rides it. Swallowed by a rising wave from below: just gone.
     float surface = surfaceAt(p.u);
-    if ((p.vv < 0 && p.v < surface) || p.v < surface - 2) {
+    if (p.vv < 0 && p.v < surface) {
       int cell = (int)((p.u + RADIUS) / DX + 0.5f);
       if (cell >= 0 && cell < N) foam_[cell] = fmaxf(foam_[cell], LANDING_FOAM);
+      p.kind = 3;
+      p.life = FLECK_LIFE;
+      p.v = surface;
+      p.vu = p.vv = 0;
+    } else if (p.v < surface - 2) {
       p.kind = 0;
     }
   }
@@ -399,7 +435,16 @@ void SideView::prepareParticles() {
       // Fat blob at the base of the tongue, thinning to a sheet as it climbs.
       float young = 1 - (CURL_LIFE - p.life) / CURL_BLOB_TIME;
       d.r = (uint8_t)(CURL_SHEET_R + (young > 0 ? (int)(young * (CURL_BLOB_R - CURL_SHEET_R) + 0.5f) : 0));
-      d.color = p.life < CURL_LIFE - 0.4f ? SHEET_EDGE_COLOR : SHEET_COLOR;  // whiter as it ages
+      // Glassy water on the way up, paling with age; once it's falling it
+      // has broken up into spray, so it turns white (otherwise a young piece
+      // falling back is water-coloured and seems to land behind the surface).
+      float age = (CURL_LIFE - p.life) / CURL_SHADE_TIME;
+      int shade = age >= 1 ? CURL_SHADES - 1 : (int)(age * (CURL_SHADES - 1));
+      if (p.vv < 0 && shade < CURL_FALLING_SHADE) shade = CURL_FALLING_SHADE;
+      d.color = curlShade[shade];
+    } else if (p.kind == 3) {
+      d.r = p.life > FLECK_LIFE / 2 ? 2 : 1;  // shrinks as it fades
+      d.color = DROPLET_COLOR;
     } else {
       d.r = 1 + (k & 1);
       d.color = DROPLET_COLOR;

@@ -662,3 +662,18 @@ Above the equator the wall curves back over the water, which a column model can'
 ### The verdict
 
 "There is a definite difference between bowl and classic. The water seems to move better. It might not curl as much, or as high, even during violent motions, but it seems to feel better. With classic I could throw water from one end of the circle to the other." Part of classic's drama was the porthole: water built height on invisible walls outside the circle. Lava stays thick with barely any curl; mercury throws fewer, smaller marbles, since only water that really overshoots the wall leaves. Bowl is now the default; classic stays switchable on the diagnostics screen (short PWR).
+
+### Pendant size: wear a dummy first
+
+The 1.85" might feel too large around a neck, though it's in line with what many statement pendants are, and for a unique piece it may be fine. As a desk toy it's the perfect size. To decide before building the real case:
+
+- **Print a rough dummy.** It doesn't need the exact shape or a perfect circle; a rough feel of size and shape is enough, including the planned taper.
+  - **Diameter:** about 60-65 mm (55 mm of glass plus the walls).
+  - **Thickness:** the real stack: 9.7 mm of board, about 6 mm of battery behind it, plus the case walls. Probably around 20 mm.
+- **Match the weight:** weigh the board and battery, and tape coins inside the dummy until it matches.
+- **Hang it on what it'll actually hang from:** a chain or a leather cord. Each sits and swings differently.
+- **Wear it for a day.** At this size, thickness and weight usually decide comfort more than diameter: 20 mm deep makes a pendant hang forward and swing.
+
+If thickness is the problem, the battery doesn't have to sit behind the board. A thinner cell, or a shaped case hiding the battery in the bail or a side pod, could bring it to about 12-15 mm.
+
+Either way the 1.85" isn't wasted: it could be the desk version, with a smaller AMOLED (1.32" or 1.43") as the pendant version, sharing all the code.

@@ -543,3 +543,45 @@ A reading order for the physics, from simplest to most involved:
 6. **`ocean_wave/Material.cpp`:** the three fluids side by side as plain numbers. It's the easiest file to play with.
 
 The long comments at the top of `SideView.cpp` and `PoolView.cpp` explain the ideas in plain words. So does the "How the tuning variables relate" section above.
+
+## Future board considerations
+
+### Moving to a smaller board
+
+The 1.85" board is fast mainly because of its **4-line QSPI** display bus: frames go out about four times faster than over a single data line. That's the first thing to check on any other board: the display controller and its bus.
+
+| Board | Display | Motion sensor | Notes |
+|---|---|---|---|
+| ESP32-S3-Touch-LCD-1.28 | 240×240 LCD, single-line SPI (GC9A01) | QMI8658 | battery charger; only 2 MB PSRAM; smallest and cheapest |
+| ESP32-S3-Touch-LCD-1.46 | 412×412 LCD | yes | speaker and mic; more pixels than the 1.85" in a smaller circle |
+| **ESP32-S3-Touch-AMOLED-1.43** | 466×466 AMOLED | QMI8658 | RTC, battery header, optional metal case (-B); likely QSPI |
+| ESP32-S3-Touch-AMOLED-1.32 | 466×466 AMOLED | possibly none | check before considering |
+
+(From search results: confirm on the official pages.)
+
+**What a port involves**, using the 1.28" as the example:
+
+- **Board library (the biggest job):** the fast strip pipeline sends 4-line QSPI transactions. A single-line SPI display with a separate data/command pin needs that part rewritten. The idea stays the same: strips rendered into two buffers while the previous one sends.
+- **Pins and quirks:** different pins. The 1.85" puts the screen and touch resets on an expander chip; check how the new board wires them, and its power latch and buttons, against its schematic.
+- **Pixel-based tuning:** wave speed, splash strength, curl speeds, particle gravity, blob sizes, foam, water levels and the pool cell size are all in pixels. They scale with the bowl radius (⅔ for 240 px). The clean way is one scale factor applied to the materials and bowl constants.
+- **Speed:** 240×240 is 44% of the pixels, so rendering takes about 6-7 ms. Sending a frame over single-line SPI at 80 MHz takes about 11.5 ms, against about 6.5 ms for QSPI now. Overlapped, that should still give 60+ FPS.
+
+### The 1.43" AMOLED: the favourite
+
+- **True black:** AMOLED pixels are off when black, so the black sky costs no power and glows in a dark room.
+- **Likely QSPI:** the fast frame path should carry over with few changes.
+- **More pixels:** 466×466 is about 1.7× today's pixel count.
+
+| Display | Pixels across | Density |
+|---|---|---|
+| 1.85" (current) | 360 | about 195 ppi |
+| 1.43" at full resolution | 466 | about 326 ppi, the same as the iPhone 4's "Retina" screen |
+| 1.43" at half resolution, pixels doubled | 233 | about 163 ppi: blocks about 16% larger than today's pixels |
+
+### The plan: try three ways and compare
+
+1. **Full resolution:** render all 466×466 pixels. Expect about 25 ms of rendering, roughly 35-40 FPS: still over the 27 FPS goal, with less headroom. Measure the real FPS.
+2. **Half resolution with smooth scaling:** render 233×233 and blend between pixels while scaling up. Gradients stay perfect, and edges (waterline, beads, flecks) come out soft instead of stepped. Rendering is cheaper than today.
+3. **Plain half resolution:** render 233×233 and copy each pixel into a 2×2 block. Cheapest, but with slightly stepped edges and squarer beads.
+
+What to expect: the water body (gradients plus dithering) hides pixels at any of these. Edges are where the differences show. At about 30 cm, when the wearer looks down, the eye can just pick out pixels at 163 ppi. Someone looking from a metre away couldn't.

@@ -585,3 +585,41 @@ The 1.85" board is fast mainly because of its **4-line QSPI** display bus: frame
 3. **Plain half resolution:** render 233×233 and copy each pixel into a 2×2 block. Cheapest, but with slightly stepped edges and squarer beads.
 
 What to expect: the water body (gradients plus dithering) hides pixels at any of these. Edges are where the differences show. At about 30 cm, when the wearer looks down, the eye can just pick out pixels at 163 ppi. Someone looking from a metre away couldn't.
+
+### A photo locket
+
+Swipe vertically to step through round photos, like a locket. There's plenty of room. Memory as of the three-material version:
+
+| Memory | Used | Free |
+|---|---|---|
+| Program flash (3 MB app partition) | 427 KB (13%) | about 2.7 MB |
+| Internal RAM (320 KB) | 157 KB (47%) | about 170 KB, shared by the stack, the DMA strip buffers and anything added later |
+| PSRAM (8 MB) | about 260 KB (diagnostics canvas) | about 7.7 MB |
+| Built-in flash storage (9 MB FAT partition) | unused | 9 MB |
+
+How it would work:
+
+- **Showing a photo:** a 360×360 photo is about 260 KB decoded, or 30-60 KB as a JPEG. Decode it once into PSRAM (well under 0.1 s), then send it through the same strip pipeline the diagnostics screen uses. The JPEG decoder plus file libraries add roughly 100-150 KB of program flash.
+- **The circle:** square photos are fine as they are. The round screen hides the corners, so the locket shows the centre circle.
+- **The gesture:** vertical swipe is free. Today's swipe requires mostly-horizontal movement, so the vertical one is its mirror image.
+- **A battery bonus:** a still photo can be drawn once and left on screen without redrawing. Locket mode would use far less power than the water.
+- **Storage:** the built-in 9 MB FAT partition, already set up and empty, holds 150-plus JPEG photos, so the SD card may not be needed. The SD slot's control pin goes through the expander chip, so check how Waveshare's demo drives it before relying on it.
+
+Getting photos onto it:
+
+- **Bluetooth (BLE):** about 50-100 KB/s in practice, so about a second per photo. It needs about 50-70 KB of internal RAM, a big chunk of what's free. The real problem is the phone side: iPhones can't send files over BLE from a web page (Safari has no Web Bluetooth), so it would need a custom app or a browser like Bluefy.
+- **Wi-Fi (recommended):** the necklace hosts a small upload web page, either as its own hotspot or on the home network.
+  - Works from any phone, including iPhones in plain Safari, with no app to install.
+  - Around 1 MB/s.
+  - The page can crop and shrink each photo to 360×360 on the phone before sending.
+  - Wi-Fi needs internal RAM too, but only while uploading: enter an upload mode from a menu or button combination.
+
+**Plan:** a vertical-swipe locket reading JPEGs from the built-in storage, photos added through a Wi-Fi upload page, an SD card later only if 150 photos isn't enough.
+
+**Photos survive code uploads.** A normal sketch upload rewrites only the boot loader, the partition table and the app partition. The FAT partition holding the photos, and the NVS settings (brightness, material), sit in their own areas of flash and aren't touched. Things that *would* wipe them:
+
+- changing the partition scheme (the storage moves or changes size)
+- the IDE's "Erase All Flash Before Sketch Upload" option
+- `esptool erase-flash`, or restoring the full factory firmware backup (`backup/factory_firmware_16MB.bin` overwrites all 16 MB)
+
+Photos on an SD card are safe from all of these.

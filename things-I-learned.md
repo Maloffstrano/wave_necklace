@@ -530,3 +530,16 @@ Key numbers from the PDF drawing in the RAR:
 **Check first:** the two drawings show different board layouts (the USB-C port, SD slot and holes sit in different places). Waveshare has revised this board more than once, and we already know of two panel revisions. Compare the drawing with your own board before modelling the holes and cut-outs.
 
 **Battery:** a 602535 cell is about 6.0 × 25 × 35 mm. Allow a few extra millimetres at one end for the protection board and wires, and measure the actual cell.
+
+## Understanding the code
+
+A reading order for the physics, from simplest to most involved:
+
+1. **`SideView::step()`** in `ocean_wave/SideView.cpp`: the heart of the water, about 20 lines. Each tiny time step, flow speeds up downhill (`q += dt * (-G * slope + aSide)`), then water moves between cells (`h -= dt * depth * dq/du`). Everything else is built on those two lines.
+2. **`SideView::update()`:** where the motion sensor becomes sloshing. It smooths gravity, takes the difference from the raw reading as the sideways push, boosts small motions, adds the swell, and triggers splashes.
+3. **`SideView::emitWallCurl()` and `updateParticles()`:** the curl. Find where the surface meets the round wall, launch pieces along the wall, let gravity bend them over, slide them along the glass, and turn them into flecks when they land.
+4. **`PoolView::step()`** in `ocean_wave/PoolView.cpp`: the 2D ripple equation, one line per cell. A cell's next height comes from its momentum plus how far it sits above or below its four neighbours. That's how ripples spread, reflect and pass through each other.
+5. **`SideView::render()`:** the speed trick. Each pixel costs two additions to know where it sits in the tilted water, then one lookup for its colour.
+6. **`ocean_wave/Material.cpp`:** the three fluids side by side as plain numbers. It's the easiest file to play with.
+
+The long comments at the top of `SideView.cpp` and `PoolView.cpp` explain the ideas in plain words. So does the "How the tuning variables relate" section above.

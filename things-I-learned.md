@@ -725,7 +725,9 @@ The user: "The differences between water, lava and mercury are real. They look m
 
 ### What it cost, and the detective work
 
-The prediction was "almost nothing": the foam thickness was already stored per pixel column, so it's only a different formula. The first version measured 1.5 ms slower per frame (about 5 FPS). Looking at the machine code the compiler produced showed why:
+The prediction was "almost nothing": the foam thickness was already stored per pixel column, so it's only a different formula. The first version measured 1.5 ms slower per frame (about 5 FPS).
+
+**How it was found: reading the machine code.** Guessing would have meant trying fixes one by one. Instead, the compiled program was turned back into the processor's own instructions (a disassembly), and the handful of instructions that run for every pixel were read one by one. The pixel loop runs about 100,000 times a frame, so each extra instruction there costs roughly 0.1 ms. 1.5 ms works out to 3-4 extra instructions per pixel, and that's what the listing showed. Each fix was then checked by flashing the old and new versions back to back and timing both. What the listing showed:
 
 - **Work moved onto every pixel:** the compiler moved the foam pixels' table lookup above the test for "is this a foam pixel?", so every water pixel paid for it.
 - **Short of registers:** the loop's values no longer all fit in the processor's registers, so some were reloaded from memory on every pixel.

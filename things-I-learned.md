@@ -529,6 +529,32 @@ Key numbers from the PDF drawing in the RAR:
 
 **Check first:** the two drawings show different board layouts (the USB-C port, SD slot and holes sit in different places). Waveshare has revised this board more than once, and we already know of two panel revisions. Compare the drawing with your own board before modelling the holes and cut-outs.
 
+#### The 1.75" AMOLED's files
+
+On its [Resources and Documents](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.75/Resources-And-Documents) page (downloaded 2026-11-24 into `3D/waveshare_175/`, git-ignored):
+
+- **3D model (STEP), DWG and PDF drawing, naked board:** [ESP32-S3-Touch-AMOLED-1.75-3D.zip](https://files.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.75/ESP32-S3-Touch-AMOLED-1.75-3D.zip), about 4.8 MB. It contains `ESP32-S3-Touch-AMOLED-1_75.stp` (19 MB), a `.dwg` and a `.pdf`.
+- **The -B (cased) version, 2D only:** [ESP32-S3-Touch-AMOLED-1.75-B-3D.zip](https://files.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.75/ESP32-S3-Touch-AMOLED-1.75-B-3D.zip) (DWG + PDF, no STEP).
+- **Schematic:** [ESP32-S3-Touch-AMOLED-1.75.pdf](https://files.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.75/ESP32-S3-Touch-AMOLED-1.75.pdf) (saved as `...-schematic.pdf`, since the drawing PDF has the same name).
+- **Example code:** [waveshareteam/ESP32-S3-Touch-AMOLED-1.75](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75) on GitHub. The pin definitions for the port will come from here and the schematic.
+
+Key numbers from the PDF drawing, side by side with the 1.85":
+
+| What | 1.75" AMOLED | 1.85" LCD |
+|---|---|---|
+| Glass (outer diameter) | 48.96 mm (touch panel) | 55.00 mm |
+| Visible window / lit area | 44.16 / 43.76 mm | 46.08 mm |
+| Black edge around the lit area | 2.60 mm | about 4.5 mm |
+| Board (PCB) diameter | 46.0 mm | |
+| Glass + display stack | 2.05 mm (0.60 mm cover glass) | 0.70 mm glass |
+| Total thickness, glass to tallest part on the back | 10.40 mm (6.90 mm without the tallest parts) | 9.70 mm |
+| Mounting holes | 3 × M2 (marked M2.00-H3.5) | 3 × M2 |
+
+- **The glass overhangs the board:** 48.96 mm of glass on a 46.0 mm board, so a case can hold the glass by its edge and the board fits inside.
+- **USB-C and connectors:** USB-C at the bottom edge, sticking out slightly past the board. An 8-pin 2.54 mm header (3 GPIOs and a UART) along one side, and two small connectors (battery and speaker, MX1.25) on the other.
+- **About 0.7 mm thicker** than the 1.85", and 6 mm smaller across the glass.
+- Check the drawing against the board when it arrives, as with the 1.85".
+
 **Battery:** a 602535 cell is about 6.0 × 25 × 35 mm. Allow a few extra millimetres at one end for the protection board and wires, and measure the actual cell.
 
 ## Understanding the code
@@ -589,10 +615,11 @@ The user compared board photos: the 1.43" has a 36 mm display in a 46 mm black f
 | 1.75" AMOLED | 44.5 mm | 48 mm | about 1.8 mm | 266 ppi |
 | 1.85" (current) | 47 mm | 55 mm glass | | 195 ppi |
 
-- About 1.5× the screen area of the 1.43" for 2 mm more diameter, and nearly the 1.85"'s screen in a pendant about 7 mm smaller.
+**Corrected from Waveshare's drawing (2026-11-24):** the 1.75"'s lit area is 43.8 mm (44.2 mm visible window) on 49.0 mm of touch glass, so the black edge is 2.6 mm each side, and the density is about 270 ppi. The 1.85"'s visible area is 46.1 mm (about 198 ppi). Details under "Case design" below. The conclusions stand:
+
+- About 1.5× the screen area of the 1.43" for 3 mm more diameter, and nearly the 1.85"'s screen in a pendant about 6 mm smaller.
 - Same 466×466 pixels as the 1.43", so the same speed and the same three-way plan below.
-- Half resolution is weaker here: doubled pixels give about 133 ppi, blocks about 1.5× today's pixels (against 16% larger on the 1.43"). Full resolution matters more on this board.
-- Check the visible glass against the drawing; it may be a little smaller than the full diagonal.
+- Half resolution is weaker here: doubled pixels give about 135 ppi, blocks about 1.5× today's pixels (against 16% larger on the 1.43"). Full resolution matters more on this board.
 - Port differences from the 1.85": CO5300 display init (not the ST77916 tables), a different touch chip, power off and battery through the AXP2101 instead of the GPIO7 latch, different pins (from the schematic or demo code). Motion sensor, chip, memory and QSPI frame path carry over. The naked board is the one to get.
 
 ### The plan: try three ways and compare
@@ -701,7 +728,7 @@ The 1.75" AMOLED was ordered, so the code was split to run on both boards before
 
 - **No switch to edit:** the board picked in the IDE decides which board code is built. The ESP32 core has no 1.75" entry, so its 1.43" AMOLED entry stands in (same chip, flash and memory). The 1.75" code is still a stub that stops the build with a clear message.
 - **Wrong-board warning:** only the AMOLED boards have the AXP2101 power chip. If 1.85" firmware finds one on startup, it says so on the serial port.
-- **Design pixels:** every tuning value (wave speed, splash strength, curl sizes, foam, gesture distances) was set in pixels of the 360 px screen. Rather than retune for 466 px, the physics keeps running in those "design pixels", and only drawing and touch are scaled. The two screens are nearly the same physical size (47 mm and 44.5 mm), so the water looks the same size on both, just sharper on the AMOLED.
+- **Design pixels:** every tuning value (wave speed, splash strength, curl sizes, foam, gesture distances) was set in pixels of the 360 px screen. Rather than retune for 466 px, the physics keeps running in those "design pixels", and only drawing and touch are scaled. The two screens are nearly the same physical size (46 mm and 44 mm visible), so the water looks the same size on both, just sharper on the AMOLED.
 
 ### Lesson: a general version cost 10% of the pool's speed
 

@@ -60,7 +60,29 @@ const float FULL_LEVEL = 195.0f;
 
 // Rendering: one screen pixel in cells, 16.16 fixed point (16384 = 1/4 cell on
 // the 360 px screen, where a cell is 4 px).
-const int32_t CELL_STEP_Q = (int32_t)(65536.0f / (4 * SCALE) + 0.5f);
+constexpr int32_t CELL_STEP_Q = (int32_t)(65536.0f / (4 * SCALE) + 0.5f);
+// Where each grid column starts on screen, the same for every row (built in
+// begin()): the first pixel whose centre lies in cell i, and how far into the
+// cell that centre is (16 bits). One extra entry marks the end of the last cell.
+const int GRID_CELLS = (int)DESIGN_WIDTH / 4 + 1;
+int16_t cellFirstX[GRID_CELLS + 1];
+uint16_t cellFirstFrac[GRID_CELLS + 1];
+
+void buildCellTable() {
+  int i = 0;
+  for (int x = 0; x < WIDTH; x++) {
+    int32_t pos = x * CELL_STEP_Q + CELL_STEP_Q / 2;
+    while (i <= (pos >> 16) && i <= GRID_CELLS) {
+      cellFirstX[i] = x;
+      cellFirstFrac[i] = (uint16_t)(pos - ((int32_t)i << 16) > 0xFFFF ? 0xFFFF : pos - ((int32_t)i << 16));
+      i++;
+    }
+  }
+  for (; i <= GRID_CELLS; i++) {
+    cellFirstX[i] = WIDTH;
+    cellFirstFrac[i] = 0;
+  }
+}
 
 uint16_t rgb565(float r, float g, float b) {  // components 0..255
   auto c = [](float v, int maxv) { int i = (int)(v + 0.5f); return i < 0 ? 0 : (i > maxv ? maxv : i); };
@@ -111,6 +133,7 @@ void PoolView::setMaterial(const Material &m) {
 }
 
 void PoolView::begin() {
+  buildCellTable();
   setMaterial(WATER);
   for (int j = 0; j < GRID; j++) {
     for (int i = 0; i < GRID; i++) {
@@ -317,13 +340,20 @@ void PoolView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
     for (int i = i0; i <= i1; i++)
       rowShade[i] = (shade_[j0][i] * (256 - wy) + shade_[j0 + 1][i] * wy) >> 8;
 
+    // Across the row, the shade is a straight line within each cell, so set
+    // up a start value and a step once per cell; each pixel is then one
+    // addition. s is the shade * 256 (palette index in the top bits).
+    // (diff * frac is split as (frac >> 1) ... >> 7 to stay inside 32 bits.)
     const uint16_t *dither[2] = {palette[y & 1], palette[(y & 1) ^ 1]};
-    int32_t posX = posX0;
-    for (int16_t x = xStart; x < xEnd; x++, posX += CELL_STEP_Q) {
-      int i = posX >> 16;
-      int wx = (posX >> 8) & 0xFF;
-      int32_t s = (rowShade[i] * (256 - wx) + rowShade[i + 1] * wx) >> 8;
-      row[x] = dither[x & 1][s >> 8];
+    int16_t x = xStart;
+    uint32_t frac = posX0 & 0xFFFF;  // the first cell starts part-way in
+    for (int i = i0; x < xEnd; i++) {
+      int32_t a = rowShade[i], diff = rowShade[i + 1] - a;
+      int32_t s = (a << 8) + ((diff * (int32_t)(frac >> 1)) >> 7);
+      int32_t ds = (diff * CELL_STEP_Q) >> 8;
+      int16_t end = cellFirstX[i + 1] < xEnd ? cellFirstX[i + 1] : xEnd;
+      for (; x < end; x++, s += ds) row[x] = dither[x & 1][s >> 16];
+      frac = cellFirstFrac[i + 1];
     }
   }
 }

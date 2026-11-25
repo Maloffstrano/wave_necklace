@@ -209,10 +209,12 @@ const int MAX_DEPTH = 400 * WIDTH / 360;  // screen px (400 on the 360 px screen
 // switches phase by flipping one bit.
 uint16_t depthColor[MAX_DEPTH][2];
 const int EDGE_LEVELS = 16;
-// Near the wall the froth fades into the colour of the water just under the
-// surface, which is also the colour of the curl tongue at its base, so the
-// tongue grows out of the water body instead of out of a white line.
-// FOAM_SHADES steps from 0 (water, at the wall) to the last (full froth).
+// Near the wall the froth fades into Material::curlBase, the colour of the
+// curl tongue at its base, so the tongue grows out of the line instead of out
+// of a different colour. (Water: froth itself, so the line stays frothy to the
+// wall. Lava and mercury: the colour just under the surface, so their tongue
+// grows out of the body.) FOAM_SHADES steps from 0 (curlBase, at the wall) to
+// the last (full froth).
 const int FOAM_SHADES = 8;
 const float WALL_FADE_PX = 50.0f;  // width of the fade, measured from the wall
 uint16_t foamShade[FOAM_SHADES];
@@ -227,10 +229,11 @@ const float CREST_WHITE_AT = 0.5f;  // share of a full crest at which the top is
 uint16_t bandColor[CREST_LEVELS][FOAM_SHADES][BAND_LEVELS];
 uint16_t edgeColor[FOAM_SHADES][EDGE_LEVELS];  // each shade blended into the black sky, for anti-aliasing
 uint16_t dropletColor;
-// The curl tongue is the fluid itself: it starts in the colour just under the
-// surface (so its overlapping blobs merge into one smooth shape with the
-// body), turns to the sheet colour as it thins and climbs, then to the spray
-// colour as it flies apart. Falling pieces are always spray coloured.
+// The curl tongue starts in Material::curlBase (water: froth, matching the
+// foam line at the wall; lava and mercury: the colour just under the surface,
+// so their blobs merge with the body), turns to the sheet colour as it thins
+// and climbs, then to the spray colour as it flies apart. Falling pieces are
+// always spray coloured.
 const int CURL_SHADES = 12;
 uint16_t curlShade[CURL_SHADES];
 const int CURL_FALLING_SHADE = CURL_SHADES - 1;
@@ -261,18 +264,18 @@ void buildColors(const Material &m) {
       depthColor[d][k] = panelColor(rgb565(r * 31 / 255 + off, g * 63 / 255 + off, b * 31 / 255 + off));
     }
   }
-  // Curl shades: surface -> sheet -> spray.
+  // Curl shades: curlBase -> sheet -> spray.
   for (int c = 0; c < CURL_SHADES; c++) {
-    float t = (float)c / (CURL_SHADES - 1) * 2;  // 0..1 surface->sheet, 1..2 sheet->spray
-    curlShade[c] = toPanel(t <= 1 ? blend(m.surface, m.sheet, t) : blend(m.sheet, m.spray, t - 1));
+    float t = (float)c / (CURL_SHADES - 1) * 2;  // 0..1 curlBase->sheet, 1..2 sheet->spray
+    curlShade[c] = toPanel(t <= 1 ? blend(m.curlBase, m.sheet, t) : blend(m.sheet, m.spray, t - 1));
   }
-  // Froth shades: surface colour at the wall -> froth.
+  // Froth shades: curlBase at the wall (where the curl grows out of it) -> froth.
   for (int f = 0; f < FOAM_SHADES; f++) {
-    Rgb c = blend(m.surface, m.froth, (float)f / (FOAM_SHADES - 1));
+    Rgb c = blend(m.curlBase, m.froth, (float)f / (FOAM_SHADES - 1));
     foamShade[f] = toPanel(c);
     for (int cl = 0; cl < CREST_LEVELS; cl++) {
       Rgb froth = blend(m.froth, m.crestFroth, (float)cl / (CREST_LEVELS - 1));
-      Rgb top = blend(m.surface, froth, (float)f / (FOAM_SHADES - 1));  // the wall fade
+      Rgb top = blend(m.curlBase, froth, (float)f / (FOAM_SHADES - 1));  // the wall fade
       for (int l = 0; l < BAND_LEVELS; l++) {
         float p = (l + 0.5f) / BAND_LEVELS;               // 0 = top of the band .. 1 = bottom
         float a = p <= 0.5f ? 0 : (p - 0.5f) / 0.5f;      // fade over the lower half

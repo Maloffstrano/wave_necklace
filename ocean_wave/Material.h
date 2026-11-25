@@ -64,7 +64,8 @@ struct Material {
   // and deeper. Each channel blends deep -> surface by near^curve.
   Rgb deep, surface, curve;
   float depthRange;       // px
-  Rgb froth;              // the foam line (fades into `surface` near the walls)
+  Rgb froth;              // the foam line (fades into `curlBase` near the walls)
+  Rgb curlBase;           // a curl piece at launch, and the foam line where it meets the wall
   Rgb crestFroth;         // the foam at the top of a full wave crest (whiter than froth for water)
   Rgb sheet;              // the curl as it thins
   Rgb spray;              // falling pieces

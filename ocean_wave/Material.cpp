@@ -33,7 +33,8 @@ const Material WATER = {
     .landingFoam = 0.6f, .fleckLife = 0.8f,
     // colours
     .deep = {10, 30, 70}, .surface = {50, 180, 240}, .curve = {2, 1, 1}, .depthRange = 190,
-    .froth = {205, 232, 252}, .crestFroth = {250, 253, 255}, .sheet = {140, 205, 245}, .spray = {200, 235, 255},
+    .froth = {205, 232, 252}, .curlBase = {245, 250, 255}, .crestFroth = {250, 253, 255},
+    .sheet = {235, 245, 253}, .spray = {248, 251, 255},
     .droplet = {240, 248, 255}, .poolShadow = {2, 8, 25}, .poolGlint = {245, 250, 255},
     // pool
     .rippleSpeed = 160, .rippleDamping = 0.8f, .lightGain = 9, .touchDrop = 6, .ringGain = 2, .poolBloop = 0,
@@ -61,7 +62,7 @@ const Material LAVA = {
     .landingFoam = 0.5f, .fleckLife = 1.5f,
     // colours
     .deep = {90, 5, 0}, .surface = {255, 150, 20}, .curve = {1, 1.6f, 3}, .depthRange = 220,
-    .froth = {255, 225, 120}, .crestFroth = {255, 225, 120}, .sheet = {255, 110, 10}, .spray = {255, 190, 70},
+    .froth = {255, 225, 120}, .curlBase = {255, 150, 20}, .crestFroth = {255, 225, 120}, .sheet = {255, 110, 10}, .spray = {255, 190, 70},
     .droplet = {255, 235, 170}, .poolShadow = {30, 0, 0}, .poolGlint = {255, 245, 190},
     // pool
     .rippleSpeed = 70, .rippleDamping = 2.5f, .lightGain = 14, .touchDrop = 8, .ringGain = 2.5f, .poolBloop = 1.5f,
@@ -91,7 +92,7 @@ const Material MERCURY = {
     .landingFoam = 0.2f, .fleckLife = 0.4f,
     // colours
     .deep = {38, 40, 46}, .surface = {190, 195, 205}, .curve = {1.5f, 1.5f, 1.3f}, .depthRange = 160,
-    .froth = {240, 243, 248}, .crestFroth = {240, 243, 248}, .sheet = {210, 214, 222}, .spray = {235, 238, 245},
+    .froth = {240, 243, 248}, .curlBase = {190, 195, 205}, .crestFroth = {240, 243, 248}, .sheet = {210, 214, 222}, .spray = {235, 238, 245},
     .droplet = {245, 247, 250}, .poolShadow = {8, 8, 12}, .poolGlint = {255, 255, 255},
     // pool
     .rippleSpeed = 200, .rippleDamping = 1.6f, .lightGain = 16, .touchDrop = 5, .ringGain = 2, .poolBloop = 0,

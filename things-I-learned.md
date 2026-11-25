@@ -693,4 +693,46 @@ The 1.85" might feel too large around a neck, though it's in line with what many
 
 If thickness is the problem, the battery doesn't have to sit behind the board. A thinner cell, or a shaped case hiding the battery in the bail or a side pod, could bring it to about 12-15 mm.
 
-Either way the 1.85" isn't wasted: it could be the desk version, with a smaller AMOLED (1.32" or 1.43") as the pendant version, sharing all the code.
+Either way the 1.85" isn't wasted: it could be the desk version, with a smaller AMOLED (1.32", 1.43" or the 1.75" now on order) as the pendant version, sharing all the code.
+
+## Two boards, one code base (2026-11-24)
+
+The 1.75" AMOLED was ordered, so the code was split to run on both boards before it arrived.
+
+- **No switch to edit:** the board picked in the IDE decides which board code is built. The ESP32 core has no 1.75" entry, so its 1.43" AMOLED entry stands in (same chip, flash and memory). The 1.75" code is still a stub that stops the build with a clear message.
+- **Wrong-board warning:** only the AMOLED boards have the AXP2101 power chip. If 1.85" firmware finds one on startup, it says so on the serial port.
+- **Design pixels:** every tuning value (wave speed, splash strength, curl sizes, foam, gesture distances) was set in pixels of the 360 px screen. Rather than retune for 466 px, the physics keeps running in those "design pixels", and only drawing and touch are scaled. The two screens are nearly the same physical size (47 mm and 44.5 mm), so the water looks the same size on both, just sharper on the AMOLED.
+
+### Lesson: a general version cost 10% of the pool's speed
+
+The pool's drawing loop assumed 4 px cells. Making it work for any cell size took the pool from 42 to 38.5 FPS. With a fixed size the compiler had turned the per-pixel arithmetic into cheap steps; the general version multiplied on every pixel. The fix was better than the original: across a row the shade changes by the same amount from pixel to pixel within each cell, so it's set up once per cell and each pixel is one addition. The pool went to 46 FPS, with exactly the same pixels on the 360 px screen. Found only because the old and new versions were flashed back to back and timed.
+
+## Frothy crests (2026-11-24)
+
+### The idea
+
+The user saw a video of a similar project with a "really frothy wave", probably just a blur applied to a line. The question: how much would it cost to make the line between sky and water thicker at the crests, down to the thin line in the valleys?
+
+### What was built
+
+- **Thickness:** 1 px in the valleys, up to 8 px at a crest. A crest is measured against the nearby surface (48 px either side), so a tilted but calm surface stays thin, and small ripples stay thin too.
+- **The soft look:** the lower half of a thick band fades into the water.
+- **Whiter tops:** after seeing it, the user asked for crest tops "closer to white, and then fade". The top now shades from the pale-blue froth to near-white as the crest rises.
+- **Brighter drops:** the drops that fall into still water stay invisible ("I like the invisible drops"), but where one lands the surface now flashes with foam, which drifts off with the ripples and fades.
+- **Per material:** water gets the full effect, lava a smaller glowing version, and mercury keeps its thin highlight.
+
+The user: "The differences between water, lava and mercury are real. They look much different now." And on the whiter crests: "The wave crests are much better now. Even with a droplet causing ripples."
+
+### What it cost, and the detective work
+
+The prediction was "almost nothing": the foam thickness was already stored per pixel column, so it's only a different formula. The first version measured 1.5 ms slower per frame (about 5 FPS). Looking at the machine code the compiler produced showed why:
+
+- **Work moved onto every pixel:** the compiler moved the foam pixels' table lookup above the test for "is this a foam pixel?", so every water pixel paid for it.
+- **Short of registers:** the loop's values no longer all fit in the processor's registers, so some were reloaded from memory on every pixel.
+- **Hidden function calls:** `fmaxf` (the larger of two numbers) and float division turn out to be function calls on this chip, not single instructions. They had been used in the crest calculation thousands of times a frame.
+
+After rewriting the loop for the compiler (marking foam pixels as the rare case, among other things), the side view runs faster with crest foam than it did before without it: 52.8 against 50.7 FPS.
+
+### Lesson: the board moves, so measure back to back
+
+The board is only propped up, and it moves whenever it's picked up to test waves. Its tilt sets how much of the screen is water, and water costs more to draw than sky, so the same code measured 0.7 ms apart after a nudge. That briefly looked like a slowdown caused by the code. Versions are now only compared back to back, without touching the board in between.

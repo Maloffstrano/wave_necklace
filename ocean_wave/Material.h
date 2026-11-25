@@ -52,6 +52,7 @@ struct Material {
 
   // ---- Side view: foam ----
   float foamMaxPx;        // foam line: 1 px + up to this much more
+  float crestFoamPx;      // extra thickness at wave crests (0 in the valleys), px
   float foamFlowGain;     // foam from fast flow, per px/s
   float foamCrestGain;    // foam from sharp crests, per px of crest
   float foamFadeTime;     // s
@@ -64,6 +65,7 @@ struct Material {
   Rgb deep, surface, curve;
   float depthRange;       // px
   Rgb froth;              // the foam line (fades into `surface` near the walls)
+  Rgb crestFroth;         // the foam at the top of a full wave crest (whiter than froth for water)
   Rgb sheet;              // the curl as it thins
   Rgb spray;              // falling pieces
   Rgb droplet;            // droplets and flecks

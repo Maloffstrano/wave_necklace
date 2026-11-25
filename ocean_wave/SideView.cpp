@@ -144,6 +144,11 @@ const float QUIET_BEFORE_DROPS = 3.0f;  // s without splashes or real motion bef
 const float ACTIVE_BOOST = 0.02f;     // g: a motion boost above this counts as real motion
 const float STILL_FLOW = 6.0f;        // px/s: every cell's flow below this counts as still
 const float STILL_BEFORE_DROPS = 2.0f;  // s the water must stay still before a drop
+// The drop itself stays invisible; where it lands, the surface flashes with
+// foam (bright at the impact, some either side), which floats off with the
+// ripples and fades (Material::foamFadeTime).
+const float DROP_FOAM = 1.0f;         // foam at the impact cell (0..1)
+const float DROP_FOAM_SIDE = 0.6f;    // foam in the cells either side
 
 // Splashes: a jolt in any direction (a bang on the table, a bump while
 // walking) kicks the bowl's natural sloshing shapes and whips up foam.
@@ -186,12 +191,23 @@ const int MAX_SPRAY_PER_FRAME = 1;       // across the whole surface
 // across the base of the new tongue, and it looks cut off from the water.
 const float CURL_CONSUMES_PX = 40.0f;    // px from the wall
 
+// Crest foam (Material::crestFoamPx): the foam line is thickest at the top of
+// each wave and thin in the valleys. A point's height is compared with the
+// surface around it (CREST_WINDOW cells either side): at or below the local
+// average it gets nothing, at the local peak the full extra thickness. Measured
+// against the local average, so a tilted but calm surface stays thin. Small
+// ripples are compared with at least CREST_MIN_RANGE, so they stay thin too.
+const int CREST_WINDOW = 12;             // cells either side (48 px)
+const float CREST_MIN_RANGE = 8.0f;      // px
+
 // ---- Colours (panel byte order), built from the material ----
 // The panel is RGB565: only 32 levels of red and blue. A smooth depth gradient
 // would show visible bands, so there are two tables offset by half a step,
 // alternated in a checkerboard (ordered dithering).
 const int MAX_DEPTH = 400 * WIDTH / 360;  // screen px (400 on the 360 px screen)
-uint16_t depthColor[2][MAX_DEPTH];
+// [depth][phase]: the two dither phases side by side, so the pixel loop
+// switches phase by flipping one bit.
+uint16_t depthColor[MAX_DEPTH][2];
 const int EDGE_LEVELS = 16;
 // Near the wall the froth fades into the colour of the water just under the
 // surface, which is also the colour of the curl tongue at its base, so the
@@ -200,6 +216,15 @@ const int EDGE_LEVELS = 16;
 const int FOAM_SHADES = 8;
 const float WALL_FADE_PX = 50.0f;  // width of the fade, measured from the wall
 uint16_t foamShade[FOAM_SHADES];
+// The foam band, top to bottom: solid froth for the upper half, then fading
+// into the water (the soft, "blurred" look of a frothy crest). A 1-2 px line
+// stays solid. Indexed by crest (CREST_LEVELS: the top shades from froth to
+// Material::crestFroth as the crest rises), by shade (the wall fade), and by
+// position down the band (0..BAND_LEVELS-1).
+const int BAND_LEVELS = 16;
+const int CREST_LEVELS = 6;
+const float CREST_WHITE_AT = 0.5f;  // share of a full crest at which the top is fully crestFroth
+uint16_t bandColor[CREST_LEVELS][FOAM_SHADES][BAND_LEVELS];
 uint16_t edgeColor[FOAM_SHADES][EDGE_LEVELS];  // each shade blended into the black sky, for anti-aliasing
 uint16_t dropletColor;
 // The curl tongue is the fluid itself: it starts in the colour just under the
@@ -233,7 +258,7 @@ void buildColors(const Material &m) {
     float b = m.deep.b + (m.surface.b - m.deep.b) * powf(near, m.curve.b);
     for (int k = 0; k < 2; k++) {
       float off = k ? 0.25f : -0.25f;  // +-1/4 of a step: the two dither phases
-      depthColor[k][d] = panelColor(rgb565(r * 31 / 255 + off, g * 63 / 255 + off, b * 31 / 255 + off));
+      depthColor[d][k] = panelColor(rgb565(r * 31 / 255 + off, g * 63 / 255 + off, b * 31 / 255 + off));
     }
   }
   // Curl shades: surface -> sheet -> spray.
@@ -245,6 +270,16 @@ void buildColors(const Material &m) {
   for (int f = 0; f < FOAM_SHADES; f++) {
     Rgb c = blend(m.surface, m.froth, (float)f / (FOAM_SHADES - 1));
     foamShade[f] = toPanel(c);
+    for (int cl = 0; cl < CREST_LEVELS; cl++) {
+      Rgb froth = blend(m.froth, m.crestFroth, (float)cl / (CREST_LEVELS - 1));
+      Rgb top = blend(m.surface, froth, (float)f / (FOAM_SHADES - 1));  // the wall fade
+      for (int l = 0; l < BAND_LEVELS; l++) {
+        float p = (l + 0.5f) / BAND_LEVELS;               // 0 = top of the band .. 1 = bottom
+        float a = p <= 0.5f ? 0 : (p - 0.5f) / 0.5f;      // fade over the lower half
+        a = a * a * (3 - 2 * a);                          // smoothstep
+        bandColor[cl][f][l] = toPanel(blend(top, m.surface, a));
+      }
+    }
     for (int k = 0; k < EDGE_LEVELS; k++) {
       float a = (k + 0.5f) / EDGE_LEVELS;  // share of the pixel covered by water
       edgeColor[f][k] = toPanel({c.r * a, c.g * a, c.b * a});
@@ -722,6 +757,12 @@ void SideView::update(float gx, float gy, float dt, float jolt) {
       }
     } else {
       kickFlow(j, (random01() < 0.5f ? -1 : 1) * strength);
+      // The impact point: face j sits between cells j-1 and j.
+      for (int c = j - 2; c <= j + 1; c++) {
+        if (c < 0 || c >= N) continue;
+        float f = (c == j - 1 || c == j) ? DROP_FOAM : DROP_FOAM_SIDE;
+        if (foam_[c] < f) foam_[c] = f;
+      }
     }
   }
 
@@ -928,24 +969,60 @@ void SideView::prepareRender() {
   // TABLE_OFFSET; the table is wider than the bowl so rotated corner pixels
   // never index outside it. The physics is in design px: u and v are
   // converted here (SCALE), and the tables hold screen px.
+  // Crest foam per cell: 0 in the valleys .. 1 at the local peak (see CREST_WINDOW).
+  // (Plain comparisons and a running sum: this runs every frame, and on this
+  // chip fmaxf is a function call.)
+  float crest[N];
+  bool wet[N];
+  for (int i = 0; i < N; i++) wet[i] = !bowl_ || dep_[i] > WET;  // dry floor: no surface
+  bool crests = m_.crestFoamPx > 0;
+  float sum = 0;
+  int count = 0;
+  for (int j = 0; j < CREST_WINDOW && j < N; j++) {  // the window around cell 0, minus its right end
+    if (wet[j]) { sum += h_[j]; count++; }
+  }
+  for (int i = 0; i < N; i++) {
+    // Slide the window to i - CREST_WINDOW .. i + CREST_WINDOW.
+    int in = i + CREST_WINDOW, out = i - CREST_WINDOW - 1;
+    if (in < N && wet[in]) { sum += h_[in]; count++; }
+    if (out >= 0 && wet[out]) { sum -= h_[out]; count--; }
+    crest[i] = 0;
+    if (!crests || !wet[i]) continue;
+    int j0 = i - CREST_WINDOW < 0 ? 0 : i - CREST_WINDOW;
+    int j1 = i + CREST_WINDOW > N - 1 ? N - 1 : i + CREST_WINDOW;
+    float top = h_[i];
+    for (int j = j0; j <= j1; j++) {
+      if (wet[j] && h_[j] > top) top = h_[j];
+    }
+    float avg = sum / count;
+    float range = top - avg;
+    if (range < CREST_MIN_RANGE) range = CREST_MIN_RANGE;
+    float c = (h_[i] - avg) / range;
+    crest[i] = c < 0 ? 0 : (c > 1 ? 1 : c);
+  }
   for (int k = 0; k < TABLE_SIZE; k++) {
     float u = (float)(k - TABLE_OFFSET) / SCALE;  // design px
     float cell = (u + RADIUS) / DX;
-    float h, foam;
+    float h, foam, cr;
     if (cell <= 0) {
       h = h_[0];
       foam = foam_[0];
+      cr = crest[0];
     } else if (cell >= N - 1) {
       h = h_[N - 1];
       foam = foam_[N - 1];
+      cr = crest[N - 1];
     } else {
       int i = (int)cell;
       float f = cell - i;
       h = h_[i] + (h_[i + 1] - h_[i]) * f;
       foam = foam_[i] + (foam_[i + 1] - foam_[i]) * f;
+      cr = crest[i] + (crest[i + 1] - crest[i]) * f;
     }
     float v = restLevel_ + h;
-    foamPx_[k] = (uint8_t)((1 + foam * m_.foamMaxPx) * SCALE + 0.5f);  // always at least a thin line
+    // Always at least a thin line; thicker at crests and where the water is churned up.
+    float px = (1 + cr * m_.crestFoamPx + foam * m_.foamMaxPx) * SCALE + 0.5f;
+    foamPx_[k] = (uint8_t)(px > BAND_MAX ? BAND_MAX : px);
     // Dry bowl floor (the surface down at the circle): no water, no foam
     // line and no anti-aliased edge tracing the empty wall. Push the surface
     // just outside the circle.
@@ -966,6 +1043,16 @@ void SideView::prepareRender() {
     // water); real foam carried to the wall stays white.
     t = fmaxf(t, foam * 2.0f);
     foamShade_[k] = (uint8_t)(t <= 0 ? 0 : (t >= 1 ? FOAM_SHADES - 1 : t * (FOAM_SHADES - 1) + 0.5f));
+
+    // This column's foam band, top to bottom: whiter on top the higher the
+    // crest, or the more foam (a drop's impact, a splash).
+    float white = cr * (1.0f / CREST_WHITE_AT);
+    if (foam > white) white = foam;
+    int level = white >= 1 ? CREST_LEVELS - 1 : (int)(white * (CREST_LEVELS - 1) + 0.5f);
+    const uint16_t *band = bandColor[level][foamShade_[k]];
+    for (int d = 0, n = foamPx_[k]; d < n; d++) {
+      bandPx_[k][d] = band[d * BAND_LEVELS / n];
+    }
   }
   // Water-frame axes: horizontal h = (downY, -downX), down d = (downX, downY).
   hxQ_ = (int32_t)(downY_ * 65536.0f);
@@ -979,8 +1066,15 @@ void SideView::renderStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *ctx
 }
 
 void SideView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
+  // The pixel loop runs about 100,000 times a frame, so it's written for the
+  // compiler: plain ints, locals instead of members, the dither phase as one
+  // bit, and foam pixels marked as the rare case so their work stays off the
+  // path of ordinary water pixels.
   const int32_t offsetQ = (int32_t)TABLE_OFFSET << 16;
   const int32_t du = hxQ_, dv = -dxQ_;
+  const int32_t *surface = surfaceQ_;
+  const uint8_t *foamPx = foamPx_;
+  const uint16_t *water = &depthColor[0][0];
 
   for (int16_t r = 0; r < rows; r++) {
     int16_t y = y0 + r;
@@ -1005,10 +1099,11 @@ void SideView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
     int32_t u = (int32_t)(((int64_t)px * hxQ_ + (int64_t)py * hyQ_) >> 16) + offsetQ;
     int32_t v = (int32_t)(-(((int64_t)px * dxQ_ + (int64_t)py * dyQ_) >> 16));
 
-    const uint16_t *dither[2] = {depthColor[y & 1], depthColor[(y & 1) ^ 1]};
-    for (int16_t x = xStart; x < xEnd; x++, u += du, v += dv) {
+    // Checkerboard dither: phase (x ^ y) & 1, flipped every pixel.
+    uint32_t phase = (uint32_t)(xStart ^ y) & 1;
+    for (int x = xStart, end = xEnd; x < end; x++, u += du, v += dv, phase ^= 1) {
       int k = u >> 16;
-      int32_t depthQ = surfaceQ_[k] - v;  // 16.16: how far below the surface
+      int32_t depthQ = surface[k] - v;  // 16.16: how far below the surface
       if (depthQ < 0) {
         // Sky, except for the pixel straddling the surface: anti-alias it by
         // how much of it is water.
@@ -1016,11 +1111,12 @@ void SideView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
         continue;
       }
       int32_t depth = depthQ >> 16;
-      if (depth < foamPx_[k]) {
-        row[x] = foamShade[foamShade_[k]];
-      } else {
-        row[x] = dither[x & 1][depth < MAX_DEPTH ? depth : MAX_DEPTH - 1];
+      if (__builtin_expect(depth < foamPx[k], 0)) {
+        row[x] = bandPx_[k][depth];
+        continue;
       }
+      if (depth > MAX_DEPTH - 1) depth = MAX_DEPTH - 1;
+      row[x] = water[(depth << 1) | phase];
     }
   }
   drawParticles(pixels, y0, rows);

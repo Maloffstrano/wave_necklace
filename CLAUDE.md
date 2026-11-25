@@ -15,6 +15,8 @@ backup/                       factory firmware dump (git-ignored)
 ```
 - Each sketch folder has its own `sketch.yaml` (FQBN + port).
 - Board code goes in NecklaceBoard. Sketches keep only app logic (e.g. brightness levels, drawing).
+- **Two boards (2026-11-24):** the board selected for the build picks the code, no switch to edit. NecklaceBoard.h checks `ARDUINO_WAVESHARE_ESP32_S3_TOUCH_LCD_185` -> board_lcd185.h/.cpp, or `ARDUINO_WAVESHARE_ESP32_S3_TOUCH_AMOLED_143` (the core has no 1.75 entry; this stands in) -> board_amoled175.h/.cpp (still an `#error` stub). Board files hold constants (size, pins, offsets, brightness range) and begin/touch/backlight/power; NecklaceBoard.cpp has the shared IMU, motion task, fast strip path and buttons (helpers in board_internal.h). The 1.85 build warns on serial if an AXP2101 (0x34, AMOLED only) answers.
+- **Design pixels (ocean_wave/Scale.h):** all tuning is in pixels of the 360 px screen. Physics runs in design px on every board; only rendering (SideView tables, particle dots, pool cell size) and touch/gesture distances are scaled by `SCALE = WIDTH / 360` (exactly 1 on the 1.85). Keep new tuning values in design px.
 - The `~/Documents/Arduino/libraries/NecklaceBoard` symlink must exist on any machine that builds this (recreate after cloning).
 
 ## Toolchain

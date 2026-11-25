@@ -58,6 +58,10 @@ uint16_t palette[2][PALETTE];         // two dither phases
 // Must match SideView's full level (195 px above centre).
 const float FULL_LEVEL = 195.0f;
 
+// Rendering: one screen pixel in cells, 16.16 fixed point (16384 = 1/4 cell on
+// the 360 px screen, where a cell is 4 px).
+const int32_t CELL_STEP_Q = (int32_t)(65536.0f / (4 * SCALE) + 0.5f);
+
 uint16_t rgb565(float r, float g, float b) {  // components 0..255
   auto c = [](float v, int maxv) { int i = (int)(v + 0.5f); return i < 0 ? 0 : (i > maxv ? maxv : i); };
   return (uint16_t)((c(r * 31 / 255, 31) << 11) | (c(g * 63 / 255, 63) << 5) | c(b * 31 / 255, 31));
@@ -150,7 +154,7 @@ void PoolView::ring(float strength) {
 }
 
 void PoolView::touch(int16_t x, int16_t y) {
-  float cx = (float)x / CELL, cy = (float)y / CELL;
+  float cx = x / (CELL * SCALE), cy = y / (CELL * SCALE);  // screen px -> cells
   // One ripple where the finger lands (a held or dragged finger adds nothing:
   // single ripples invite more taps to watch them cross).
   if (!touching_) {
@@ -301,20 +305,24 @@ void PoolView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
     for (int16_t x = xEnd; x < WIDTH; x++) row[x] = 0;
     if (xStart >= xEnd) continue;
 
-    // Blend the two grid rows around this pixel row (weight in 1/8ths: pixel
-    // centres sit at 1/8, 3/8, 5/8, 7/8 of a 4 px cell).
-    int j0 = y / CELL;
-    int wy = 2 * (y - j0 * CELL) + 1;  // 1, 3, 5, 7
-    int i0 = xStart / CELL, i1 = (xEnd - 1) / CELL + 1;
+    // Blend the two grid rows around this pixel row. A pixel's centre sits
+    // at (y + 0.5) / cell size in cells: the whole part is the grid row, the
+    // fraction (0..255) the weight. (With 4 px cells: 1/8, 3/8, 5/8, 7/8.)
+    int32_t posY = y * CELL_STEP_Q + CELL_STEP_Q / 2;
+    int j0 = posY >> 16;
+    int wy = (posY >> 8) & 0xFF;
+    int32_t posX0 = xStart * CELL_STEP_Q + CELL_STEP_Q / 2;
+    int i0 = posX0 >> 16, i1 = (((xEnd - 1) * CELL_STEP_Q + CELL_STEP_Q / 2) >> 16) + 1;
     if (i1 > GRID - 1) i1 = GRID - 1;
     for (int i = i0; i <= i1; i++)
-      rowShade[i] = (shade_[j0][i] * (8 - wy) + shade_[j0 + 1][i] * wy) >> 3;
+      rowShade[i] = (shade_[j0][i] * (256 - wy) + shade_[j0 + 1][i] * wy) >> 8;
 
     const uint16_t *dither[2] = {palette[y & 1], palette[(y & 1) ^ 1]};
-    for (int16_t x = xStart; x < xEnd; x++) {
-      int i = x / CELL;
-      int wx = 2 * (x - i * CELL) + 1;
-      int32_t s = (rowShade[i] * (8 - wx) + rowShade[i + 1] * wx) >> 3;
+    int32_t posX = posX0;
+    for (int16_t x = xStart; x < xEnd; x++, posX += CELL_STEP_Q) {
+      int i = posX >> 16;
+      int wx = (posX >> 8) & 0xFF;
+      int32_t s = (rowShade[i] * (256 - wx) + rowShade[i + 1] * wx) >> 8;
       row[x] = dither[x & 1][s >> 8];
     }
   }

@@ -1,6 +1,8 @@
 // Ocean wave necklace: water sloshing inside a round "fish bowl" display,
 // driven by the motion sensor.
-// Board: Waveshare ESP32-S3-Touch-LCD-1.85 (via the NecklaceBoard library).
+// Board: Waveshare ESP32-S3-Touch-LCD-1.85, later also the AMOLED-1.75 (via
+// the NecklaceBoard library; the board selected for the build picks the code).
+// Sizes below are in design pixels of the 360 px screen, scaled by SCALE (Scale.h).
 //
 // Screens (BOOT button toggles):
 // - Wave: the necklace itself: water sloshing in the bowl (SideView.cpp).
@@ -23,17 +25,19 @@
 #include "FreeSans12pt7b.h"
 #include "SideView.h"
 #include "PoolView.h"
+#include "Scale.h"
 #include <Preferences.h>
 
 using namespace NecklaceBoard;
 
 Arduino_GFX *panel = nullptr;     // the physical display (used only during setup)
-Arduino_Canvas *hud = nullptr;    // 360x360 text framebuffer for the diagnostics screen (PSRAM)
+Arduino_Canvas *hud = nullptr;    // full-screen text framebuffer for the diagnostics screen (PSRAM)
 Arduino_Canvas *label = nullptr;  // small overlay for the wave screen's FPS label
 
 const int16_t CX = WIDTH / 2;
 const int16_t CY = HEIGHT / 2;
-const int16_t RIM = 168;  // radius of the direction markers
+const int16_t RIM = (int16_t)(168 * SCALE);  // radius of the direction markers
+const int16_t MARKER_R = (int16_t)(9 * SCALE);
 
 // Mapping from sensor axes to screen axes (screen x = right, y = down).
 // Measured on the board: with the USB-C port at the bottom, gravity reads
@@ -253,8 +257,8 @@ void drawDirectionMarkers(const Motion &m) {
   if (len < 0.15f) return;  // screen nearly flat: no clear "down"
   gx /= len;
   gy /= len;
-  hud->fillCircle(CX + gx * RIM, CY + gy * RIM, 9, RGB565_BLUE);   // down: water
-  hud->fillCircle(CX - gx * RIM, CY - gy * RIM, 9, RGB565_WHITE);  // up: sky
+  hud->fillCircle(CX + gx * RIM, CY + gy * RIM, MARKER_R, RGB565_BLUE);   // down: water
+  hud->fillCircle(CX - gx * RIM, CY - gy * RIM, MARKER_R, RGB565_WHITE);  // up: sky
 }
 
 // Copies rows from the canvas into a strip, swapping to the panel's byte order.
@@ -280,7 +284,7 @@ void diagnosticsFrame(const Motion &m, bool motionOk, uint32_t t0) {
 // ============================================================================
 
 const int16_t LABEL_W = 230, LABEL_H = 26;  // fits inside the circle at this height
-const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - 70;
+const int16_t LABEL_X = CX - LABEL_W / 2, LABEL_Y = HEIGHT - (int16_t)(70 * SCALE);
 bool showFpsLabel = false;  // FPS/render overlay on the wave screen (the diagnostics screen always shows timing)
 bool showModelLabel = false; // "bowl" / "classic" on the wave screen (set true while comparing models)
 
@@ -354,9 +358,9 @@ void waveFrame(const Motion &m, bool motionOk, float jolt, uint32_t t0) {
 // Swipe: the finger travels this far sideways (mostly sideways) soon after
 // landing. A finger that moves at all can't start dimming, so the two
 // gestures never clash.
-const int16_t SWIPE_PX = 80;
+const int16_t SWIPE_PX = (int16_t)(80 * SCALE);
 const uint32_t SWIPE_MS = 600;
-const int16_t STILL_PX = 25;  // moved further than this: not a hold
+const int16_t STILL_PX = (int16_t)(25 * SCALE);  // moved further than this: not a hold
 
 bool fingerDown = false;
 int16_t fingerX = 0, fingerY = 0;

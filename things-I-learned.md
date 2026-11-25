@@ -555,6 +555,7 @@ The 1.85" board is fast mainly because of its **4-line QSPI** display bus: frame
 | ESP32-S3-Touch-LCD-1.28 | 240×240 LCD, single-line SPI (GC9A01) | QMI8658 | battery charger; only 2 MB PSRAM; smallest and cheapest |
 | ESP32-S3-Touch-LCD-1.46 | 412×412 LCD | yes | speaker and mic; more pixels than the 1.85" in a smaller circle |
 | **ESP32-S3-Touch-AMOLED-1.43** | 466×466 AMOLED | QMI8658 | RTC, battery header, optional metal case (-B); likely QSPI |
+| **ESP32-S3-Touch-AMOLED-1.75** | 466×466 AMOLED, QSPI (CO5300) | QMI8658 | RTC, TCA9554 expander, AXP2101 power chip (no GPIO latch), audio + mics; touch CST9217 or FT3168 (wiki contradicts itself); -B/-C have aluminium cases |
 | ESP32-S3-Touch-AMOLED-1.32 | 466×466 AMOLED | possibly none | check before considering |
 
 (From search results: confirm on the official pages.)
@@ -577,6 +578,22 @@ The 1.85" board is fast mainly because of its **4-line QSPI** display bus: frame
 | 1.85" (current) | 360 | about 195 ppi |
 | 1.43" at full resolution | 466 | about 326 ppi, the same as the iPhone 4's "Retina" screen |
 | 1.43" at half resolution, pixels doubled | 233 | about 163 ppi: blocks about 16% larger than today's pixels |
+
+### The 1.75" AMOLED: nearly the same size, much more screen (2026-11-17)
+
+The user compared board photos: the 1.43" has a 36 mm display in a 46 mm black frame, the 1.75" a 48 mm frame. The size in inches is the diagonal, which on a round screen is the diameter.
+
+| | Glass | Board frame | Black edge each side | Density |
+|---|---|---|---|---|
+| 1.43" AMOLED | 36.3 mm | 46 mm | about 4.8 mm | 326 ppi |
+| 1.75" AMOLED | 44.5 mm | 48 mm | about 1.8 mm | 266 ppi |
+| 1.85" (current) | 47 mm | 55 mm glass | | 195 ppi |
+
+- About 1.5× the screen area of the 1.43" for 2 mm more diameter, and nearly the 1.85"'s screen in a pendant about 7 mm smaller.
+- Same 466×466 pixels as the 1.43", so the same speed and the same three-way plan below.
+- Half resolution is weaker here: doubled pixels give about 133 ppi, blocks about 1.5× today's pixels (against 16% larger on the 1.43"). Full resolution matters more on this board.
+- Check the visible glass against the drawing; it may be a little smaller than the full diagonal.
+- Port differences from the 1.85": CO5300 display init (not the ST77916 tables), a different touch chip, power off and battery through the AXP2101 instead of the GPIO7 latch, different pins (from the schematic or demo code). Motion sensor, chip, memory and QSPI frame path carry over. The naked board is the one to get.
 
 ### The plan: try three ways and compare
 

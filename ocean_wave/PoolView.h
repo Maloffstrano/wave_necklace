@@ -7,6 +7,7 @@
 #pragma once
 #include <NecklaceBoard.h>
 #include "Material.h"
+#include "Scale.h"
 
 class PoolView {
  public:
@@ -40,8 +41,10 @@ class PoolView {
   static void renderStrip(uint16_t *pixels, int16_t y0, int16_t rows, void *ctx);
 
  private:
-  static constexpr int CELL = 4;                       // px per cell
-  static constexpr int GRID = NecklaceBoard::WIDTH / CELL + 1;  // 91 cells across, centres at 0, 4 .. 360 px
+  // The grid is the same on every board, in design px (Scale.h); on screen a
+  // cell is CELL * SCALE px (4 on the 360 px screen).
+  static constexpr int CELL = 4;                       // design px per cell
+  static constexpr int GRID = (int)DESIGN_WIDTH / CELL + 1;  // 91 cells across, centres at 0, 4 .. 360 px
   static constexpr int CENTRE = GRID / 2;              // cell 45 = the bowl centre
   static constexpr int RADIUS_CELLS = CENTRE - 1;      // water stops one cell inside the rim
 

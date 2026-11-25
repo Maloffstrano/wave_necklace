@@ -1,24 +1,13 @@
-#include "NecklaceBoard.h"
+// Shared by every board: the QMI8658 motion sensor and its task, the fast
+// frame path (DMA strips on the display's QSPI bus) and the buttons.
+// Board-specific code is in board_<name>.cpp.
+#include "board_internal.h"
 #include <Wire.h>
 #include "driver/spi_master.h"
-#include "esp_lcd_panel_io.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
-#include "st77916_waveshare_init.h"
 
 namespace NecklaceBoard {
-
-// ---- TCA9554 IO expander ----
-static constexpr uint8_t TCA9554_ADDR = 0x20;
-static constexpr uint8_t TCA9554_OUTPUT = 0x01;
-static constexpr uint8_t TCA9554_CONFIG = 0x03;
-static constexpr uint8_t EXIO_TP_RST = 1 << 0;   // EXIO1
-static constexpr uint8_t EXIO_LCD_RST = 1 << 1;  // EXIO2
-
-// ---- CST816 touch ----
-static constexpr uint8_t CST816_ADDR = 0x15;
-static constexpr uint8_t CST816_REG_FINGERS = 0x02;
-static constexpr uint8_t CST816_REG_NOSLEEP = 0xFE;
 
 // ---- QMI8658 IMU (on Wire, SA0 low) ----
 static constexpr uint8_t QMI_ADDR = 0x6B;
@@ -44,70 +33,23 @@ static spi_device_handle_t fastDev = nullptr;
 static uint16_t *strips[2] = {nullptr, nullptr};
 static spi_transaction_ext_t fastTrans[2];
 
-static Arduino_DataBus *bus = nullptr;
-static Arduino_GFX *gfx = nullptr;
-static int rev = 0;
+namespace detail {
 
-static void tcaWrite(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(TCA9554_ADDR);
-  Wire.write(reg);
-  Wire.write(value);
-  Wire.endTransmission();
+void serialNoWait() {
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
+  // Serial is the native USB port. By default a print blocks (up to a
+  // timeout) when the USB buffer is full because nothing on the computer is
+  // reading, which stalls the whole loop. Never wait: drop output instead.
+  Serial.setTxTimeoutMs(0);
+#endif
 }
 
-// The LCD and touch reset lines live on the expander, not on GPIOs.
-static void resetPanelAndTouch() {
-  tcaWrite(TCA9554_CONFIG, (uint8_t)~(EXIO_TP_RST | EXIO_LCD_RST));  // both as outputs
-  tcaWrite(TCA9554_OUTPUT, 0x00);                                     // assert reset
-  delay(20);
-  tcaWrite(TCA9554_OUTPUT, EXIO_TP_RST | EXIO_LCD_RST);              // release reset
-  delay(120);
+bool i2cPresent(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
 }
 
-// The board ships with two panel revisions that need different init
-// sequences. Like Waveshare's demo, read register 0x04 over QSPI to tell
-// them apart. Returns 1 or 2 (1 if the read fails).
-static int detectPanelRevision() {
-  spi_bus_config_t buscfg = {};
-  buscfg.data0_io_num = PIN_LCD_D0;
-  buscfg.data1_io_num = PIN_LCD_D1;
-  buscfg.sclk_io_num = PIN_LCD_SCK;
-  buscfg.data2_io_num = PIN_LCD_D2;
-  buscfg.data3_io_num = PIN_LCD_D3;
-  buscfg.data4_io_num = buscfg.data5_io_num = buscfg.data6_io_num = buscfg.data7_io_num = -1;
-  buscfg.max_transfer_sz = 2048;
-  buscfg.flags = SPICOMMON_BUSFLAG_MASTER;
-  if (spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO) != ESP_OK) {
-    Serial.println("NecklaceBoard: spi_bus_initialize failed");
-    return 1;
-  }
-
-  esp_lcd_panel_io_spi_config_t iocfg = {};
-  iocfg.cs_gpio_num = PIN_LCD_CS;
-  iocfg.dc_gpio_num = -1;
-  iocfg.spi_mode = 0;
-  iocfg.pclk_hz = 5 * 1000 * 1000;
-  iocfg.trans_queue_depth = 10;
-  iocfg.lcd_cmd_bits = 32;
-  iocfg.lcd_param_bits = 8;
-  iocfg.flags.quad_mode = 1;
-
-  int result = 1;
-  esp_lcd_panel_io_handle_t io = nullptr;
-  if (esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &iocfg, &io) == ESP_OK) {
-    uint8_t data[4] = {0};
-    int cmd = (0x0B << 24) | (0x04 << 8);  // QSPI read opcode + register 0x04
-    if (esp_lcd_panel_io_rx_param(io, cmd, data, sizeof(data)) == ESP_OK) {
-      Serial.printf("NecklaceBoard: reg 0x04 = %02X %02X %02X %02X\n", data[0], data[1], data[2], data[3]);
-      if (data[0] == 0x00 && data[1] == 0x02 && data[2] == 0x7F && data[3] == 0x7F) result = 2;
-    } else {
-      Serial.println("NecklaceBoard: panel register read failed");
-    }
-    esp_lcd_panel_io_del(io);
-  }
-  spi_bus_free(SPI2_HOST);  // hand the bus over to Arduino_GFX
-  return result;
-}
+}  // namespace detail
 
 static void qmiWrite(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(QMI_ADDR);
@@ -125,7 +67,7 @@ static bool qmiRead(uint8_t reg, uint8_t *buf, size_t len) {
   return true;
 }
 
-static void imuInit() {
+void detail::imuInit() {
   uint8_t id = 0;
   if (!qmiRead(QMI_WHO_AM_I, &id, 1) || id != 0x05) {
     Serial.printf("NecklaceBoard: QMI8658 not found (WHO_AM_I = 0x%02X)\n", id);
@@ -147,7 +89,7 @@ static void imuInit() {
   Serial.println("NecklaceBoard: QMI8658 ready");
 }
 
-static bool fastInit() {
+bool detail::fastInit() {
   spi_device_interface_config_t dev = {};
   dev.command_bits = 8;
   dev.address_bits = 24;
@@ -194,8 +136,10 @@ static void fastCommand(uint8_t reg, const uint8_t *data = nullptr, size_t len =
 void drawRows(int16_t y0, int16_t y1, StripRenderer render, void *ctx) {
   if (!fastDev || !strips[1] || y0 >= y1) return;
 
-  const uint8_t caset[4] = {0, 0, (uint8_t)((WIDTH - 1) >> 8), (uint8_t)((WIDTH - 1) & 0xFF)};
-  const uint8_t raset[4] = {(uint8_t)(y0 >> 8), (uint8_t)y0, (uint8_t)((y1 - 1) >> 8), (uint8_t)(y1 - 1)};
+  const int16_t c0 = COL_OFFSET, c1 = COL_OFFSET + WIDTH - 1;
+  const int16_t r0 = ROW_OFFSET + y0, r1 = ROW_OFFSET + y1 - 1;
+  const uint8_t caset[4] = {(uint8_t)(c0 >> 8), (uint8_t)c0, (uint8_t)(c1 >> 8), (uint8_t)c1};
+  const uint8_t raset[4] = {(uint8_t)(r0 >> 8), (uint8_t)r0, (uint8_t)(r1 >> 8), (uint8_t)r1};
   fastCommand(0x2A, caset, 4);  // CASET: full width
   fastCommand(0x2B, raset, 4);  // RASET: rows y0 .. y1 - 1
   fastCommand(0x2C);            // RAMWR
@@ -248,57 +192,7 @@ void clearScreen(uint16_t rgb565) {
   drawFrame(fillStrip, &c);
 }
 
-static void touchInit() {
-  Wire1.begin(PIN_TP_SDA, PIN_TP_SCL, 400000);
-  Wire1.beginTransmission(CST816_ADDR);
-  Wire1.write(CST816_REG_NOSLEEP);
-  Wire1.write(0x01);  // non-zero disables auto-sleep, so polling always gets an answer
-  Wire1.endTransmission();
-}
-
-Arduino_GFX *begin() {
-#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE
-  // Serial is the native USB port. By default a print blocks (up to a
-  // timeout) when the USB buffer is full because nothing on the computer is
-  // reading, which stalls the whole loop. Never wait: drop output instead.
-  Serial.setTxTimeoutMs(0);
-#endif
-
-  // Keep ourselves powered when running from the battery: the PWR button only
-  // powers the board while held, unless this latch is driven HIGH.
-  pinMode(PIN_PWR_LATCH, OUTPUT);
-  digitalWrite(PIN_PWR_LATCH, HIGH);
-  pinMode(PIN_BTN_PWR, INPUT);
-  pinMode(PIN_BTN_BOOT, INPUT_PULLUP);
-
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  resetPanelAndTouch();
-
-  rev = detectPanelRevision();
-  Serial.printf("NecklaceBoard: panel revision %d\n", rev);
-
-  // Shared: Arduino_GFX only holds the SPI bus while it draws, so our fast
-  // DMA device (fastInit) can use the same bus.
-  bus = new Arduino_ESP32QSPI(PIN_LCD_CS, PIN_LCD_SCK, PIN_LCD_D0, PIN_LCD_D1, PIN_LCD_D2, PIN_LCD_D3,
-                              true /* is_shared_interface */);
-  gfx = new Arduino_ST77916(bus, GFX_NOT_DEFINED /* RST via expander */, 0 /* rotation */,
-                            true /* IPS */, WIDTH, HEIGHT, 0, 0, 0, 0,
-                            rev == 2 ? waveshare_185_init_rev2 : waveshare_185_init_rev1,
-                            rev == 2 ? sizeof(waveshare_185_init_rev2) : sizeof(waveshare_185_init_rev1));
-  if (!gfx->begin(DISPLAY_SPI_HZ)) {
-    Serial.println("NecklaceBoard: gfx->begin() failed");
-    return nullptr;
-  }
-  gfx->fillScreen(RGB565_BLACK);
-
-  ledcAttach(PIN_LCD_BL, BACKLIGHT_FREQ, BACKLIGHT_BITS);
-  setBacklight(BACKLIGHT_MAX);
-
-  touchInit();
-  imuInit();
-  fastInit();
-  return gfx;
-}
+// ---- Motion ----
 
 bool imuReady() { return imuOk; }
 
@@ -316,7 +210,6 @@ bool readMotion(Motion &m) {
   return true;
 }
 
-// ---- Motion task ----
 static portMUX_TYPE motionLock = portMUX_INITIALIZER_UNLOCKED;
 static Motion motionLatest = {};
 static float motionPeakJolt = 0;
@@ -366,39 +259,7 @@ bool latestMotion(Motion &m, float &peakJolt) {
   return have;
 }
 
-int panelRevision() { return rev; }
-
-void setBacklight(uint16_t duty) {
-  ledcWrite(PIN_LCD_BL, duty > BACKLIGHT_MAX ? BACKLIGHT_MAX : duty);
-}
-
-bool isTouched() {
-  Wire1.beginTransmission(CST816_ADDR);
-  Wire1.write(CST816_REG_FINGERS);
-  if (Wire1.endTransmission(false) != 0) return false;
-  if (Wire1.requestFrom(CST816_ADDR, (uint8_t)1) != 1) return false;
-  return Wire1.read() > 0;
-}
-
-bool readTouch(int16_t &x, int16_t &y) {
-  // Registers 0x02..0x06: finger count, then X and Y as 12-bit values
-  // (high 4 bits in the low nibble of the first byte).
-  Wire1.beginTransmission(CST816_ADDR);
-  Wire1.write(CST816_REG_FINGERS);
-  if (Wire1.endTransmission(false) != 0) return false;
-  if (Wire1.requestFrom(CST816_ADDR, (uint8_t)5) != 5) return false;
-  uint8_t b[5];
-  for (auto &v : b) v = Wire1.read();
-  if (b[0] == 0) return false;
-  x = ((b[1] & 0x0F) << 8) | b[2];
-  y = ((b[3] & 0x0F) << 8) | b[4];
-  return true;
-}
-
-void powerOff() {
-  setBacklight(0);
-  digitalWrite(PIN_PWR_LATCH, LOW);
-}
+// ---- Buttons ----
 
 void Button::begin() {
   attachInterruptArg(digitalPinToInterrupt(pin_), onEdge, this, CHANGE);

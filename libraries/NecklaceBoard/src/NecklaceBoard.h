@@ -1,4 +1,12 @@
-// Board support for the Waveshare ESP32-S3-Touch-LCD-1.85.
+// Board support for the necklace's round display boards:
+//   - Waveshare ESP32-S3-Touch-LCD-1.85    (360x360 LCD)
+//   - Waveshare ESP32-S3-Touch-AMOLED-1.75 (466x466 AMOLED, not written yet)
+//
+// The board is chosen by the board selected for the build (the FQBN), so
+// there's no switch to edit: each board's constants (size, pins, ...) are in
+// board_<name>.h, and its start-up, touch, backlight and power code in
+// board_<name>.cpp. The motion sensor, the fast frame path and the buttons
+// are shared (NecklaceBoard.cpp).
 //
 //   Arduino_GFX *gfx = NecklaceBoard::begin();   // display ready, backlight 100%, touch ready
 //   NecklaceBoard::setBacklight(10);             // 0..NecklaceBoard::BACKLIGHT_MAX
@@ -6,48 +14,28 @@
 #pragma once
 #include <Arduino_GFX_Library.h>
 
+#if defined(ARDUINO_WAVESHARE_ESP32_S3_TOUCH_LCD_185)
+#define NECKLACE_BOARD_LCD185 1
+#include "board_lcd185.h"
+#elif defined(ARDUINO_WAVESHARE_ESP32_S3_TOUCH_AMOLED_143)  // stands in for the 1.75 (no core entry)
+#define NECKLACE_BOARD_AMOLED175 1
+#include "board_amoled175.h"
+#else
+#error "NecklaceBoard: select the Waveshare ESP32-S3-Touch-LCD-1.85 (or, for the AMOLED 1.75, the AMOLED-1.43) board"
+#endif
+
 namespace NecklaceBoard {
 
-// ---- Display ----
-constexpr int16_t WIDTH = 360;
-constexpr int16_t HEIGHT = 360;
-
-// ---- Pins (Waveshare wiki) ----
-constexpr int PIN_LCD_CS = 21;
-constexpr int PIN_LCD_SCK = 40;
-constexpr int PIN_LCD_D0 = 46;
-constexpr int PIN_LCD_D1 = 45;
-constexpr int PIN_LCD_D2 = 42;
-constexpr int PIN_LCD_D3 = 41;
-constexpr int PIN_LCD_TE = 18;
-constexpr int PIN_LCD_BL = 5;
-constexpr int PIN_I2C_SDA = 11;  // Wire: TCA9554 expander, QMI8658 IMU, PCF85063 RTC
-constexpr int PIN_I2C_SCL = 10;
-constexpr int PIN_TP_SDA = 1;    // Wire1: CST816 touch
-constexpr int PIN_TP_SCL = 3;
-constexpr int PIN_TP_INT = 4;
-constexpr int PIN_BTN_BOOT = 0;  // BOOT button, LOW when pressed (free after boot)
-constexpr int PIN_BTN_PWR = 6;   // PWR button, LOW when pressed
-constexpr int PIN_PWR_LATCH = 7; // HIGH keeps the board powered from the battery
-
-// QSPI clock for the display. Waveshare's demo uses 80 MHz; a full
-// 360x360 RGB565 frame then takes about 6.5 ms on the wire.
-constexpr int32_t DISPLAY_SPI_HZ = 80000000;
-
-// ---- Backlight ----
-constexpr uint32_t BACKLIGHT_FREQ = 20000;
-constexpr uint8_t BACKLIGHT_BITS = 10;
-constexpr uint16_t BACKLIGHT_MAX = 1 << BACKLIGHT_BITS;  // fully on
-
-// Brings up I2C buses, resets the panel and touch via the expander, detects
-// the panel revision, starts the display (cleared to black), turns the
-// backlight fully on and prepares touch. Returns the display, or nullptr on failure.
+// Brings up I2C buses, resets the panel and touch, starts the display
+// (cleared to black), turns the backlight fully on and prepares touch and the
+// motion sensor. Returns the display, or nullptr on failure.
 Arduino_GFX *begin();
 
-// 1 or 2: which of Waveshare's two ST77916 panel revisions was detected.
+// Panel revision, for boards that ship with more than one (the 1.85" has two
+// ST77916 panels needing different init sequences): 1 or 2. Otherwise 1.
 int panelRevision();
 
-// Backlight PWM duty, 0 (off) .. BACKLIGHT_MAX (fully on).
+// Screen brightness, 0 (off) .. BACKLIGHT_MAX (full).
 void setBacklight(uint16_t duty);
 
 // True while a finger is on the screen.
@@ -58,7 +46,7 @@ bool isTouched();
 bool readTouch(int16_t &x, int16_t &y);
 
 // ---- Buttons and power ----
-// Cuts battery power (releases the power latch). On USB power the board keeps running.
+// Cuts battery power. On USB power the board keeps running.
 void powerOff();
 
 // A push button (active low). Presses are caught by a GPIO interrupt, so a

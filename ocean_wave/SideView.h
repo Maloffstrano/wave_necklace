@@ -16,6 +16,7 @@
 #pragma once
 #include <NecklaceBoard.h>
 #include "Material.h"
+#include "Scale.h"
 
 class SideView {
  public:
@@ -56,9 +57,12 @@ class SideView {
   float downY() const { return downY_; }
 
  private:
+  // The physics and particles work in design pixels (Scale.h); only the
+  // render tables, particle dots and the circle mask are in screen pixels.
   static constexpr int N = 91;            // physics cells across the bowl
-  static constexpr float RADIUS = 180.0f; // bowl radius in pixels
+  static constexpr float RADIUS = DESIGN_WIDTH / 2;  // bowl radius, design px (180)
   static constexpr float DX = 2 * RADIUS / (N - 1);  // 4 px between cells
+  static constexpr float SCREEN_R = NecklaceBoard::WIDTH / 2.0f;  // bowl radius on screen, px
 
   void step(float dt, float aSide);
   void stepBowl(float dt, float aSide);
@@ -128,9 +132,10 @@ class SideView {
   Dot dots_[MAX_PARTICLES];
   int dotCount_ = 0;
 
-  // Per-frame render data, one entry per 1 px step across the bowl (u).
-  // Wider than the bowl (+-256 px) so rotated corner pixels stay in range.
-  static constexpr int TABLE_OFFSET = 256;
+  // Per-frame render data, one entry per 1 screen px step across the bowl (u).
+  // Wider than the bowl (half the diagonal, about 0.707 * WIDTH, + 2) so
+  // rotated corner pixels stay in range: +-256 px on the 360 px screen.
+  static constexpr int TABLE_OFFSET = NecklaceBoard::WIDTH * 181 / 256 + 2;
   static constexpr int TABLE_SIZE = 2 * TABLE_OFFSET;
   int32_t surfaceQ_[TABLE_SIZE] = {};  // surface height (v), 16.16 fixed point
   uint8_t foamPx_[TABLE_SIZE] = {};    // foam thickness, px

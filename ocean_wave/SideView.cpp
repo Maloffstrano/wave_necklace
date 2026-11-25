@@ -190,7 +190,7 @@ const float CURL_CONSUMES_PX = 40.0f;    // px from the wall
 // The panel is RGB565: only 32 levels of red and blue. A smooth depth gradient
 // would show visible bands, so there are two tables offset by half a step,
 // alternated in a checkerboard (ordered dithering).
-const int MAX_DEPTH = 400;
+const int MAX_DEPTH = 400 * WIDTH / 360;  // screen px (400 on the 360 px screen)
 uint16_t depthColor[2][MAX_DEPTH];
 const int EDGE_LEVELS = 16;
 // Near the wall the froth fades into the colour of the water just under the
@@ -223,9 +223,10 @@ Rgb blend(const Rgb &a, const Rgb &b, float t) {
 }
 
 void buildColors(const Material &m) {
+  const float range = m.depthRange * SCALE;  // the table is indexed by screen px
   for (int d = 0; d < MAX_DEPTH; d++) {
     // Surface colour just under the surface, deepening to `deep`.
-    float t = fminf(d / m.depthRange, 1.0f);
+    float t = fminf(d / range, 1.0f);
     float near = 1 - t;
     float r = m.deep.r + (m.surface.r - m.deep.r) * powf(near, m.curve.r);  // 0..255
     float g = m.deep.g + (m.surface.g - m.deep.g) * powf(near, m.curve.g);
@@ -609,12 +610,12 @@ void SideView::prepareParticles() {
     const Particle &p = particles_[k];
     if (!p.kind) continue;
     Dot &d = dots_[dotCount_++];
-    d.x = (int16_t)(WIDTH / 2 + p.u * downY_ - p.v * downX_);
-    d.y = (int16_t)(HEIGHT / 2 - p.u * downX_ - p.v * downY_);
+    d.x = (int16_t)(WIDTH / 2 + (p.u * downY_ - p.v * downX_) * SCALE);
+    d.y = (int16_t)(HEIGHT / 2 - (p.u * downX_ + p.v * downY_) * SCALE);
     if (p.kind == 1) {
       // Fat blob at the base of the tongue, thinning to a sheet as it climbs.
       float young = 1 - (m_.curlLife - p.life) / m_.curlBlobTime;
-      d.r = (uint8_t)(m_.curlSheetR + (young > 0 ? (int)(young * (m_.curlBlobR - m_.curlSheetR) + 0.5f) : 0));
+      d.r = (uint8_t)((m_.curlSheetR + (young > 0 ? (int)(young * (m_.curlBlobR - m_.curlSheetR) + 0.5f) : 0)) * SCALE);
       // Glassy water on the way up, paling with age; once it's falling it
       // has broken up into spray, so it turns white (otherwise a young piece
       // falling back is water-coloured and seems to land behind the surface).
@@ -623,17 +624,17 @@ void SideView::prepareParticles() {
       if (p.vv < 0 && shade < CURL_FALLING_SHADE) shade = CURL_FALLING_SHADE;
       d.color = curlShade[shade];
     } else if (p.kind == 3) {
-      d.r = p.life > m_.fleckLife / 2 ? 2 : 1;  // shrinks as it fades
+      d.r = (uint8_t)((p.life > m_.fleckLife / 2 ? 2 : 1) * SCALE);  // shrinks as it fades
       d.color = dropletColor;
     } else {
-      d.r = 1 + (k & 1);
+      d.r = (uint8_t)((1 + (k & 1)) * SCALE);
       d.color = dropletColor;
     }
   }
 }
 
 void SideView::drawParticles(uint16_t *pixels, int16_t y0, int16_t rows) const {
-  const int32_t r2max = (int32_t)(RADIUS - 1) * (RADIUS - 1);
+  const int32_t r2max = (int32_t)(SCREEN_R - 1) * (SCREEN_R - 1);
   for (int k = 0; k < dotCount_; k++) {
     const Dot &d = dots_[k];
     if (d.y + d.r < y0 || d.y - d.r >= y0 + rows) continue;
@@ -922,11 +923,14 @@ void SideView::updateFoam(float dt) {
 }
 
 void SideView::prepareRender() {
-  // Surface height and foam thickness for every 1 px step across the bowl,
-  // interpolated from the physics cells. Index = u + TABLE_OFFSET; the table
-  // is wider than the bowl so rotated corner pixels never index outside it.
+  // Surface height and foam thickness for every 1 screen px step across the
+  // bowl, interpolated from the physics cells. Index = u (screen px) +
+  // TABLE_OFFSET; the table is wider than the bowl so rotated corner pixels
+  // never index outside it. The physics is in design px: u and v are
+  // converted here (SCALE), and the tables hold screen px.
   for (int k = 0; k < TABLE_SIZE; k++) {
-    float cell = (k - TABLE_OFFSET + RADIUS) / DX;
+    float u = (float)(k - TABLE_OFFSET) / SCALE;  // design px
+    float cell = (u + RADIUS) / DX;
     float h, foam;
     if (cell <= 0) {
       h = h_[0];
@@ -940,9 +944,8 @@ void SideView::prepareRender() {
       h = h_[i] + (h_[i + 1] - h_[i]) * f;
       foam = foam_[i] + (foam_[i + 1] - foam_[i]) * f;
     }
-    float u = (float)(k - TABLE_OFFSET);
     float v = restLevel_ + h;
-    foamPx_[k] = (uint8_t)(1 + foam * m_.foamMaxPx + 0.5f);  // always at least a thin line
+    foamPx_[k] = (uint8_t)((1 + foam * m_.foamMaxPx) * SCALE + 0.5f);  // always at least a thin line
     // Dry bowl floor (the surface down at the circle): no water, no foam
     // line and no anti-aliased edge tracing the empty wall. Push the surface
     // just outside the circle.
@@ -952,7 +955,7 @@ void SideView::prepareRender() {
       v = floorV - 2;
       foamPx_[k] = 0;
     }
-    surfaceQ_[k] = (int32_t)(v * 65536.0f);
+    surfaceQ_[k] = (int32_t)(v * SCALE * 65536.0f);  // screen px
 
     // Distance to the wall at the surface's height (the wall is a circle,
     // so at height v it sits at |u| = sqrt(R^2 - v^2)), for the froth fade.
@@ -986,7 +989,7 @@ void SideView::render(uint16_t *pixels, int16_t y0, int16_t rows) const {
     // Visible span of this row: the round display only shows pixels inside
     // the circle, so the corners just get black.
     float dyc = y - HEIGHT / 2 + 0.5f;
-    float half2 = RADIUS * RADIUS - dyc * dyc;
+    float half2 = SCREEN_R * SCREEN_R - dyc * dyc;
     int16_t half = half2 > 0 ? (int16_t)ceilf(sqrtf(half2)) : 0;
     int16_t xStart = WIDTH / 2 - half, xEnd = WIDTH / 2 + half;
     if (xStart < 0) xStart = 0;
